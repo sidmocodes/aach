@@ -1,14 +1,10 @@
-To implement the feature where a pre-made HTML page is embedded inside the "Performance and SEO" tab, you can make use of React's `dangerouslySetInnerHTML` property or use an iframe to display the HTML content. Since you only want this change for the "Performance and SEO" tab, the approach will specifically target this tab within your React components.
+To implement the feature where clicking the "Performance and SEO" tab opens an HTML page inside it, you can use an `iframe` to embed the HTML content directly into the tab. This approach allows you to display any HTML content dynamically while keeping the user experience consistent with the rest of the application.
 
-Here's how you can integrate a pre-made HTML page into the "Performance and SEO" tab:
+Here’s how you can modify the relevant React components to accommodate this behavior:
 
-### 1. Using an Iframe to Display the HTML Content
+### 1. Updated `ReportsPage.js`
 
-An iframe is a straightforward way to embed an HTML document within your React component. This method is secure and avoids potential issues with `dangerouslySetInnerHTML`. You can adjust the `ReportsPage.js` component to use an iframe only for the "Performance and SEO" tab.
-
-#### `ReportsPage.js`
-
-Update `ReportsPage.js` to conditionally render an iframe when the "Performance and SEO" tab is active:
+The `ReportsPage.js` component needs to handle both displaying an embedded HTML page and listing accessibility issues. The component will conditionally render either the `iframe` or the list based on the active tab.
 
 ```jsx
 import React, { useState, useEffect } from 'react';
@@ -18,24 +14,20 @@ import FileTable from './FileTable';
 
 function ReportsPage({ url }) {
   const [activeTab, setActiveTab] = useState('performance');
-  const [performanceData, setPerformanceData] = useState([]);
   const [accessibilityData, setAccessibilityData] = useState([]);
 
   useEffect(() => {
-    const fetchData = async () => {
-      try {
-        if (activeTab === 'accessibility') {
+    if (activeTab === 'accessibility') {
+      const fetchAccessibilityData = async () => {
+        try {
           const response = await axios.get('/accessibility-data', { params: { url } });
           setAccessibilityData(response.data);
+        } catch (error) {
+          console.error('Error fetching accessibility data:', error);
         }
-      } catch (error) {
-        console.error('Error fetching data:', error);
-      }
-    };
+      };
 
-    // Fetch data only for accessibility tab
-    if (activeTab === 'accessibility') {
-      fetchData();
+      fetchAccessibilityData();
     }
   }, [activeTab, url]);
 
@@ -44,11 +36,9 @@ function ReportsPage({ url }) {
       <h3>Report for: {url}</h3>
       <Tabs activeTab={activeTab} onTabChange={setActiveTab} />
       {activeTab === 'performance' ? (
-        <iframe
-          src="/path/to/your/performance-seo-report.html"
-          title="Performance and SEO Report"
-          style={{ width: '100%', height: '600px', border: 'none' }}
-        ></iframe>
+        <div className="html-embed">
+          <iframe src="/performance-report.html" title="Performance and SEO Report" width="100%" height="600px" frameBorder="0"></iframe>
+        </div>
       ) : (
         <FileTable data={accessibilityData} tab="accessibility" />
       )}
@@ -59,51 +49,95 @@ function ReportsPage({ url }) {
 export default ReportsPage;
 ```
 
-In this example:
+### 2. Embedding the HTML Page
 
-- **Iframe Attributes**:
-  - `src`: Specifies the path to your pre-made HTML page. You will need to ensure that this HTML file is accessible. You can place it in the `public` folder of your React project for simplicity, e.g., `public/performance-seo-report.html`.
-  - `title`: Provides an accessible name for the iframe content.
-  - `style`: Defines the dimensions and appearance of the iframe. Adjust `width` and `height` as necessary to fit your design.
+The `iframe` element is used to embed an HTML page. In this example, the `src` attribute points to `/performance-report.html`, which should be served by your Flask backend. Ensure that you have a route in your Flask application that can serve this HTML file.
 
-### 2. Serving the HTML Page
+### 3. Flask Backend: Serving the HTML File
 
-Place your HTML page in the `public` folder of your React application. The `public` folder is accessible to the client and is the best place for static files such as this:
+Add a route to your Flask backend to serve the HTML file. This route will handle requests for the performance report and return the HTML content.
 
-1. **Add HTML File**: Place your `performance-seo-report.html` file inside the `public` folder.
+```python
+from flask import Flask, request, jsonify, send_from_directory
 
-2. **Reference Correctly**: Ensure the `src` attribute in the iframe matches the path to this file, e.g., `/performance-seo-report.html`.
+app = Flask(__name__)
 
-### 3. Updating File Structure
+@app.route('/check-accessibility', methods=['POST'])
+def check_accessibility():
+    data = request.json
+    url = data.get('url')
+    # Process the URL to generate accessibility data
+    return jsonify({"status": "success", "message": f"Checked accessibility for {url}"}), 200
 
-Ensure your project structure looks like this:
+@app.route('/performance-data', methods=['GET'])
+def performance_data():
+    url = request.args.get('url')
+    # Fetch performance data for the URL
+    performance_data = [
+        {"name": "App.js", "lines": 100, "bugs": 0, "vulnerabilities": 0, "codeSmells": 1, "coverage": 75, "duplications": 0},
+        # Add more sample data as needed
+    ]
+    return jsonify(performance_data), 200
 
+@app.route('/accessibility-data', methods=['GET'])
+def accessibility_data():
+    url = request.args.get('url')
+    # Fetch accessibility data for the URL
+    accessibility_data = [
+        {"problem": "Missing alt attribute", "criticality": "High", "fix": "Add alt attribute", "description": "Images must have alt attributes", "help": "Add meaningful alt attributes to images", "helpLink": "http://example.com/help", "tags": ["img", "accessibility"], "id": "1"},
+        # Add more sample data as needed
+    ]
+    return jsonify(accessibility_data), 200
+
+@app.route('/performance-report.html')
+def performance_report():
+    # Ensure the file 'performance-report.html' is in the 'static' folder or specify a different path if necessary
+    return send_from_directory('static', 'performance-report.html')
+
+if __name__ == '__main__':
+    app.run(debug=True)
 ```
-my-sonarqube-dashboard/
-|-- public/
-|   |-- performance-seo-report.html
-|-- src/
-|   |-- components/
-|   |   |-- Dashboard.js
-|   |   |-- MainMenu.js
-|   |   |-- HomePage.js
-|   |   |-- ReportsPage.js
-|   |   |-- Tabs.js
-|   |   |-- FileTable.js
-|   |   |-- FileRow.js
-|   |   |-- Accordion.js
-|   |-- App.js
-|   |-- App.css
+
+### 4. Setting Up the `performance-report.html` File
+
+Ensure you have an HTML file named `performance-report.html` in your Flask project's `static` directory. This HTML file will contain the content that you want to display under the "Performance and SEO" tab.
+
+**Example of `performance-report.html`:**
+
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Performance and SEO Report</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+        }
+        h1 {
+            color: #007bff;
+        }
+        .content {
+            padding: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="content">
+        <h1>Performance and SEO Report</h1>
+        <p>This is a detailed report on the performance and SEO metrics of the specified website.</p>
+        <!-- Add more detailed HTML content here -->
+    </div>
+</body>
+</html>
 ```
 
-### 4. Running the Application
+### 5. Running the Application
 
-After making these changes, start your React development server:
-
-```bash
-npm start
-```
+- **React Development Server:** Use `npm start` to run your React app.
+- **Flask Backend:** Start the Flask server using `python your_flask_app.py`.
 
 ### Conclusion
 
-Using an iframe is a clean and simple method to embed a pre-made HTML page within a React application, especially for the use case you described. It avoids the potential security issues and complexities associated with using `dangerouslySetInnerHTML`. This method is also versatile and allows you to display complex content seamlessly within your existing application. By placing the HTML file in the `public` directory, you ensure it's easily accessible and can be updated independently of your main React application logic.
+With these updates, clicking the "Performance and SEO" tab will now embed an HTML page within the tab content using an `iframe`. The `iframe` approach allows you to dynamically load and display rich HTML content, making it easier to present comprehensive reports. This structure keeps your application flexible and easily extendable, allowing for further customization of the HTML content or additional tabs in the future.
