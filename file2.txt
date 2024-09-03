@@ -1,28 +1,20 @@
-To implement the feature where the Home page includes a search field for entering a URL and a "Go" button to navigate to the Reports page, you can follow the steps below. This will involve updating the `App.js` to handle state changes, adding a search field in the Home page, and ensuring that navigation to the Reports page occurs when the "Go" button is clicked.
+To implement the functionality where the "Go" button sends a POST request to a Flask backend, and each tab on the Reports page fetches data from different endpoints, you can follow these steps. This will involve using React's `useEffect` hook to make network requests and handling responses to populate the data on the page.
 
-### 1. Project Structure Updates
+### 1. Setting Up Axios for HTTP Requests
 
-With the new feature in mind, the project structure remains largely the same, but we'll update the relevant components:
+First, you'll want to use a library like Axios to handle HTTP requests in React. If you don't have Axios installed, you can add it to your project:
 
-```
-src
-|-- components
-|   |-- Dashboard.js
-|   |-- MainMenu.js
-|   |-- HomePage.js
-|   |-- ReportsPage.js
-|   |-- Tabs.js
-|   |-- FileTable.js
-|   |-- FileRow.js
-|-- App.js
-|-- App.css
+```bash
+npm install axios
 ```
 
-### 2. Updating Components
+### 2. Updated Components
+
+Here’s how to implement the components with Axios to handle communication with your Flask backend.
 
 #### `App.js`
 
-The `App.js` component will now manage the input URL state and handle navigation between the Home and Reports pages:
+`App.js` will remain largely the same, managing state for the current page and the input URL.
 
 ```jsx
 import React, { useState } from 'react';
@@ -35,7 +27,7 @@ function App() {
   const [currentPage, setCurrentPage] = useState('home');
   const [inputUrl, setInputUrl] = useState('');
 
-  const handleUrlSubmit = (url) => {
+  const handleUrlSubmit = async (url) => {
     setInputUrl(url);
     setCurrentPage('reports');
   };
@@ -57,10 +49,11 @@ export default App;
 
 #### `HomePage.js`
 
-This component contains the input field for entering a URL and a "Go" button. It uses the `onUrlSubmit` prop to pass the URL back to the `App.js` component for navigation:
+Update `HomePage.js` to send a POST request when the "Go" button is clicked.
 
 ```jsx
 import React, { useState } from 'react';
+import axios from 'axios';
 
 function HomePage({ onUrlSubmit }) {
   const [url, setUrl] = useState('');
@@ -69,9 +62,15 @@ function HomePage({ onUrlSubmit }) {
     setUrl(event.target.value);
   };
 
-  const handleGoClick = () => {
+  const handleGoClick = async () => {
     if (url) {
-      onUrlSubmit(url);
+      try {
+        const response = await axios.post('/check-accessibility', { url });
+        console.log('Response from server:', response.data);
+        onUrlSubmit(url);
+      } catch (error) {
+        console.error('Error checking accessibility:', error);
+      }
     }
   };
 
@@ -94,24 +93,45 @@ export default HomePage;
 
 #### `ReportsPage.js`
 
-This component can be updated to use the `url` prop, displaying the input URL and the reports:
+Update this component to fetch data when the tab is switched or when the component mounts, using the `useEffect` hook.
 
 ```jsx
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import axios from 'axios';
 import Tabs from './Tabs';
 import FileTable from './FileTable';
 
 function ReportsPage({ url }) {
   const [activeTab, setActiveTab] = useState('performance');
+  const [performanceData, setPerformanceData] = useState([]);
+  const [accessibilityData, setAccessibilityData] = useState([]);
+
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        if (activeTab === 'performance') {
+          const response = await axios.get('/performance-data', { params: { url } });
+          setPerformanceData(response.data);
+        } else if (activeTab === 'accessibility') {
+          const response = await axios.get('/accessibility-data', { params: { url } });
+          setAccessibilityData(response.data);
+        }
+      } catch (error) {
+        console.error('Error fetching data:', error);
+      }
+    };
+
+    fetchData();
+  }, [activeTab, url]);
 
   return (
     <div className="reports-page">
       <h3>Report for: {url}</h3>
       <Tabs activeTab={activeTab} onTabChange={setActiveTab} />
       {activeTab === 'performance' ? (
-        <FileTable tab="performance" />
+        <FileTable data={performanceData} tab="performance" />
       ) : (
-        <FileTable tab="accessibility" />
+        <FileTable data={accessibilityData} tab="accessibility" />
       )}
     </div>
   );
@@ -120,111 +140,126 @@ function ReportsPage({ url }) {
 export default ReportsPage;
 ```
 
-### 3. CSS Styling Updates (`App.css`)
+#### `FileTable.js`
 
-To style the search input and button, add the following CSS:
+Adjust `FileTable.js` to receive and display data passed as props. This data will be the performance or accessibility data depending on the active tab.
 
-```css
-.App {
-  font-family: Arial, sans-serif;
-  text-align: center;
-  margin: 20px;
+```jsx
+import React from 'react';
+import FileRow from './FileRow';
+
+function FileTable({ data, tab }) {
+  return (
+    <div className="file-table">
+      <table>
+        <thead>
+          <tr>
+            <th>File</th>
+            <th>Lines of Code</th>
+            {tab === 'performance' ? (
+              <>
+                <th>Bugs</th>
+                <th>Vulnerabilities</th>
+                <th>Code Smells</th>
+                <th>Coverage</th>
+                <th>Duplications</th>
+              </>
+            ) : (
+              <th>Accessibility Issues</th>
+            )}
+          </tr>
+        </thead>
+        <tbody>
+          {data.map((file, index) => (
+            <FileRow key={index} file={file} tab={tab} />
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
 }
 
-.dashboard-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  background-color: #f4f4f4;
-  padding: 10px 20px;
-  border-bottom: 1px solid #ddd;
+export default FileTable;
+```
+
+#### `FileRow.js`
+
+This component can remain the same, as it dynamically renders each file's data based on the passed props.
+
+```jsx
+import React from 'react';
+
+function FileRow({ file, tab }) {
+  return (
+    <tr>
+      <td>{file.name}</td>
+      <td>{file.lines}</td>
+      {tab === 'performance' ? (
+        <>
+          <td>{file.bugs}</td>
+          <td>{file.vulnerabilities}</td>
+          <td>{file.codeSmells}</td>
+          <td>{file.coverage}%</td>
+          <td>{file.duplications}%</td>
+        </>
+      ) : (
+        <td>{file.issues}</td>
+      )}
+    </tr>
+  );
 }
 
-.dashboard-header h2 {
-  margin: 0;
-}
+export default FileRow;
+```
 
-.main-menu {
-  display: flex;
-  gap: 10px;
-}
+### 3. Backend Integration (Flask)
 
-.main-menu button {
-  background-color: #fff;
-  border: 1px solid #ddd;
-  padding: 5px 10px;
-  cursor: pointer;
-}
+Ensure your Flask backend has the following routes set up to handle the POST and GET requests:
 
-.home-page {
-  margin-top: 50px;
-}
+```python
+from flask import Flask, request, jsonify
 
-.home-page input {
-  width: 300px;
-  padding: 10px;
-  margin-right: 10px;
-  border: 1px solid #ddd;
-  border-radius: 4px;
-}
+app = Flask(__name__)
 
-.home-page button {
-  padding: 10px 20px;
-  background-color: #007bff;
-  color: white;
-  border: none;
-  border-radius: 4px;
-  cursor: pointer;
-}
+@app.route('/check-accessibility', methods=['POST'])
+def check_accessibility():
+    data = request.json
+    url = data.get('url')
+    # Process the URL to generate accessibility data
+    return jsonify({"status": "success", "message": f"Checked accessibility for {url}"}), 200
 
-.tabs {
-  display: flex;
-  justify-content: center;
-  gap: 10px;
-  margin-top: 20px;
-}
+@app.route('/performance-data', methods=['GET'])
+def performance_data():
+    url = request.args.get('url')
+    # Fetch performance data for the URL
+    performance_data = [
+        {"name": "App.js", "lines": 100, "bugs": 0, "vulnerabilities": 0, "codeSmells": 1, "coverage": 75, "duplications": 0},
+        # Add more sample data as needed
+    ]
+    return jsonify(performance_data), 200
 
-.tabs button {
-  background-color: #f0f0f0;
-  border: 1px solid #ddd;
-  padding: 10px 20px;
-  cursor: pointer;
-}
+@app.route('/accessibility-data', methods=['GET'])
+def accessibility_data():
+    url = request.args.get('url')
+    # Fetch accessibility data for the URL
+    accessibility_data = [
+        {"name": "index.html", "lines": 20, "issues": 2},
+        {"name": "style.css", "lines": 15, "issues": 1},
+        # Add more sample data as needed
+    ]
+    return jsonify(accessibility_data), 200
 
-.tabs .active {
-  background-color: #007bff;
-  color: #fff;
-  border: 1px solid #0056b3;
-}
-
-.file-table {
-  margin-top: 20px;
-}
-
-.file-table table {
-  width: 100%;
-  border-collapse: collapse;
-}
-
-.file-table th, .file-table td {
-  border: 1px solid #ddd;
-  padding: 10px;
-  text-align: left;
-}
-
-.file-table th {
-  background-color: #f4f4f4;
-}
+if __name__ == '__main__':
+    app.run(debug=True)
 ```
 
 ### 4. Running the Application
 
-After making these changes, run your application using:
+After implementing these changes, start your React development server and Flask backend:
 
-```bash
-npm start
-```
+- **React Development Server:** Use `npm start`.
+- **Flask Backend:** Run your Flask app with `python your_flask_app.py`.
 
 ### Conclusion
 
-With these updates, the Home page will now include a search input and a "Go" button, allowing users to input a URL to be checked for accessibility. When the user clicks "Go," the application navigates to the Reports page, displaying the input URL and relevant report tabs. This structure provides a clear, interactive way for users to engage with the accessibility checker tool.
+This implementation sets up the Home page to send a POST request to a Flask backend, and it uses the Reports page to fetch data dynamically based on user interactions with tabs. Using `useEffect` with Axios in React allows you to handle asynchronous data fetching efficiently, making the application responsive and interactive.
