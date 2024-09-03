@@ -1,0 +1,109 @@
+To implement the feature where a pre-made HTML page is embedded inside the "Performance and SEO" tab, you can make use of React's `dangerouslySetInnerHTML` property or use an iframe to display the HTML content. Since you only want this change for the "Performance and SEO" tab, the approach will specifically target this tab within your React components.
+
+Here's how you can integrate a pre-made HTML page into the "Performance and SEO" tab:
+
+### 1. Using an Iframe to Display the HTML Content
+
+An iframe is a straightforward way to embed an HTML document within your React component. This method is secure and avoids potential issues with `dangerouslySetInnerHTML`. You can adjust the `ReportsPage.js` component to use an iframe only for the "Performance and SEO" tab.
+
+#### `ReportsPage.js`
+
+Update `ReportsPage.js` to conditionally render an iframe when the "Performance and SEO" tab is active:
+
+```jsx
+import React, { useState, useEffect } from 'react';
+import axios from 'axios';
+import Tabs from './Tabs';
+import FileTable from './FileTable';
+
+function ReportsPage({ url }) {
+  const [activeTab, setActiveTab] = useState('performance');
+  const [performanceData, setPerformanceData] = useState([]);
+  const [accessibilityData, setAccessibilityData] = useState([]);
+
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        if (activeTab === 'accessibility') {
+          const response = await axios.get('/accessibility-data', { params: { url } });
+          setAccessibilityData(response.data);
+        }
+      } catch (error) {
+        console.error('Error fetching data:', error);
+      }
+    };
+
+    // Fetch data only for accessibility tab
+    if (activeTab === 'accessibility') {
+      fetchData();
+    }
+  }, [activeTab, url]);
+
+  return (
+    <div className="reports-page">
+      <h3>Report for: {url}</h3>
+      <Tabs activeTab={activeTab} onTabChange={setActiveTab} />
+      {activeTab === 'performance' ? (
+        <iframe
+          src="/path/to/your/performance-seo-report.html"
+          title="Performance and SEO Report"
+          style={{ width: '100%', height: '600px', border: 'none' }}
+        ></iframe>
+      ) : (
+        <FileTable data={accessibilityData} tab="accessibility" />
+      )}
+    </div>
+  );
+}
+
+export default ReportsPage;
+```
+
+In this example:
+
+- **Iframe Attributes**:
+  - `src`: Specifies the path to your pre-made HTML page. You will need to ensure that this HTML file is accessible. You can place it in the `public` folder of your React project for simplicity, e.g., `public/performance-seo-report.html`.
+  - `title`: Provides an accessible name for the iframe content.
+  - `style`: Defines the dimensions and appearance of the iframe. Adjust `width` and `height` as necessary to fit your design.
+
+### 2. Serving the HTML Page
+
+Place your HTML page in the `public` folder of your React application. The `public` folder is accessible to the client and is the best place for static files such as this:
+
+1. **Add HTML File**: Place your `performance-seo-report.html` file inside the `public` folder.
+
+2. **Reference Correctly**: Ensure the `src` attribute in the iframe matches the path to this file, e.g., `/performance-seo-report.html`.
+
+### 3. Updating File Structure
+
+Ensure your project structure looks like this:
+
+```
+my-sonarqube-dashboard/
+|-- public/
+|   |-- performance-seo-report.html
+|-- src/
+|   |-- components/
+|   |   |-- Dashboard.js
+|   |   |-- MainMenu.js
+|   |   |-- HomePage.js
+|   |   |-- ReportsPage.js
+|   |   |-- Tabs.js
+|   |   |-- FileTable.js
+|   |   |-- FileRow.js
+|   |   |-- Accordion.js
+|   |-- App.js
+|   |-- App.css
+```
+
+### 4. Running the Application
+
+After making these changes, start your React development server:
+
+```bash
+npm start
+```
+
+### Conclusion
+
+Using an iframe is a clean and simple method to embed a pre-made HTML page within a React application, especially for the use case you described. It avoids the potential security issues and complexities associated with using `dangerouslySetInnerHTML`. This method is also versatile and allows you to display complex content seamlessly within your existing application. By placing the HTML file in the `public` directory, you ensure it's easily accessible and can be updated independently of your main React application logic.
