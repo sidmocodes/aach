@@ -1,16 +1,29 @@
-To implement the functionality where the "Accessibility Issues" tab displays a list with fields for each row (problem, criticality, and fix), and each row expands to show a carousel in an accordion design with more details (problem, description, help, help link, tags, id), you can follow these steps.
+To implement the updated requirements for the "Accessibility Issues" tab, we will use an accordion design to show detailed information when each row is expanded. This will involve updating the React components to handle the new data structure and behavior. Here's how you can set up your React components to achieve this functionality:
 
-This approach involves using React state management to handle the opening and closing of each row, as well as a carousel component to navigate through the detailed fields.
+### 1. Updated Project Structure
 
-### 1. Project Structure Updates
+Keep the current project structure but focus on updating the relevant components:
 
-The project structure remains largely the same, but we will introduce an accordion design and a carousel within the `FileRow.js` component to accommodate the detailed view.
+```
+src
+|-- components
+|   |-- Dashboard.js
+|   |-- MainMenu.js
+|   |-- HomePage.js
+|   |-- ReportsPage.js
+|   |-- Tabs.js
+|   |-- FileTable.js
+|   |-- FileRow.js
+|   |-- Accordion.js
+|-- App.js
+|-- App.css
+```
 
-### 2. Component Implementation
+### 2. Implementing the Components
 
 #### `ReportsPage.js`
 
-Update `ReportsPage.js` to fetch and display accessibility data in the desired format.
+Update the `ReportsPage` component to manage the state and handle data for the "Accessibility Issues" tab. This includes fetching data when the tab is active.
 
 ```jsx
 import React, { useState, useEffect } from 'react';
@@ -59,7 +72,7 @@ export default ReportsPage;
 
 #### `FileTable.js`
 
-Modify `FileTable.js` to pass the necessary data to each `FileRow`. For accessibility, the list will be different from performance, focusing on issues.
+Update `FileTable.js` to handle the display of accessibility issues using an accordion design:
 
 ```jsx
 import React from 'react';
@@ -68,34 +81,32 @@ import FileRow from './FileRow';
 function FileTable({ data, tab }) {
   return (
     <div className="file-table">
-      <table>
-        <thead>
-          <tr>
-            {tab === 'performance' ? (
-              <>
-                <th>File</th>
-                <th>Lines of Code</th>
-                <th>Bugs</th>
-                <th>Vulnerabilities</th>
-                <th>Code Smells</th>
-                <th>Coverage</th>
-                <th>Duplications</th>
-              </>
-            ) : (
-              <>
-                <th>Problem</th>
-                <th>Criticality</th>
-                <th>Fix</th>
-              </>
-            )}
-          </tr>
-        </thead>
-        <tbody>
-          {data.map((item, index) => (
-            <FileRow key={index} item={item} tab={tab} />
+      {tab === 'performance' ? (
+        <table>
+          <thead>
+            <tr>
+              <th>File</th>
+              <th>Lines of Code</th>
+              <th>Bugs</th>
+              <th>Vulnerabilities</th>
+              <th>Code Smells</th>
+              <th>Coverage</th>
+              <th>Duplications</th>
+            </tr>
+          </thead>
+          <tbody>
+            {data.map((file, index) => (
+              <FileRow key={index} file={file} tab={tab} />
+            ))}
+          </tbody>
+        </table>
+      ) : (
+        <div className="accessibility-list">
+          {data.map((issue, index) => (
+            <FileRow key={index} file={issue} tab={tab} />
           ))}
-        </tbody>
-      </table>
+        </div>
+      )}
     </div>
   );
 }
@@ -105,134 +116,190 @@ export default FileTable;
 
 #### `FileRow.js`
 
-Update `FileRow.js` to handle accordion logic and display a carousel for the accessibility issues.
+This component will render each row of data and include an accordion to show detailed information for accessibility issues:
 
 ```jsx
 import React, { useState } from 'react';
+import Accordion from './Accordion';
 
-function FileRow({ item, tab }) {
+function FileRow({ file, tab }) {
   const [isOpen, setIsOpen] = useState(false);
 
-  const toggleOpen = () => {
+  const toggleAccordion = () => {
     setIsOpen(!isOpen);
   };
 
-  return (
-    <>
-      {tab === 'performance' ? (
-        <tr>
-          <td>{item.name}</td>
-          <td>{item.lines}</td>
-          <td>{item.bugs}</td>
-          <td>{item.vulnerabilities}</td>
-          <td>{item.codeSmells}</td>
-          <td>{item.coverage}%</td>
-          <td>{item.duplications}%</td>
-        </tr>
-      ) : (
-        <>
-          <tr onClick={toggleOpen} className="accordion-header">
-            <td>{item.problem}</td>
-            <td>{item.criticality}</td>
-            <td>{item.fix}</td>
-          </tr>
-          {isOpen && (
-            <tr className="accordion-content">
-              <td colSpan="3">
-                <div className="carousel">
-                  <div className="carousel-item">
-                    <strong>Problem:</strong> {item.problem}
-                  </div>
-                  <div className="carousel-item">
-                    <strong>Description:</strong> {item.description}
-                  </div>
-                  <div className="carousel-item">
-                    <strong>Help:</strong> {item.help}
-                  </div>
-                  <div className="carousel-item">
-                    <strong>Help Link:</strong> <a href={item.helpLink}>{item.helpLink}</a>
-                  </div>
-                  <div className="carousel-item">
-                    <strong>Tags:</strong> {item.tags.join(', ')}
-                  </div>
-                  <div className="carousel-item">
-                    <strong>ID:</strong> {item.id}
-                  </div>
-                </div>
-              </td>
-            </tr>
-          )}
-        </>
-      )}
-    </>
-  );
+  if (tab === 'performance') {
+    return (
+      <tr>
+        <td>{file.name}</td>
+        <td>{file.lines}</td>
+        <td>{file.bugs}</td>
+        <td>{file.vulnerabilities}</td>
+        <td>{file.codeSmells}</td>
+        <td>{file.coverage}%</td>
+        <td>{file.duplications}%</td>
+      </tr>
+    );
+  } else {
+    // Accessibility Issues tab
+    return (
+      <div className="file-row">
+        <div className="file-summary" onClick={toggleAccordion}>
+          <div>{file.problem}</div>
+          <div>{file.criticality}</div>
+          <div>{file.fix}</div>
+        </div>
+        {isOpen && <Accordion details={file} />}
+      </div>
+    );
+  }
 }
 
 export default FileRow;
 ```
 
-### 3. CSS for Accordion and Carousel (`App.css`)
+#### `Accordion.js`
 
-Add styles to handle the accordion and carousel appearance.
+This component will render the detailed information for each accessibility issue in an accordion-style display:
+
+```jsx
+import React from 'react';
+
+function Accordion({ details }) {
+  return (
+    <div className="accordion-content">
+      <p><strong>Problem:</strong> {details.problem}</p>
+      <p><strong>Description:</strong> {details.description}</p>
+      <p><strong>Help:</strong> {details.help}</p>
+      <p><strong>Help Link:</strong> <a href={details.helpLink} target="_blank" rel="noopener noreferrer">{details.helpLink}</a></p>
+      <p><strong>Tags:</strong> {details.tags.join(', ')}</p>
+      <p><strong>ID:</strong> {details.id}</p>
+    </div>
+  );
+}
+
+export default Accordion;
+```
+
+### 3. Styling with CSS (`App.css`)
+
+Add styles to support the accordion and the general layout of the file table and rows:
 
 ```css
-.accordion-header {
+.App {
+  font-family: Arial, sans-serif;
+  text-align: center;
+  margin: 20px;
+}
+
+.dashboard-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background-color: #f4f4f4;
+  padding: 10px 20px;
+  border-bottom: 1px solid #ddd;
+}
+
+.dashboard-header h2 {
+  margin: 0;
+}
+
+.main-menu {
+  display: flex;
+  gap: 10px;
+}
+
+.main-menu button {
+  background-color: #fff;
+  border: 1px solid #ddd;
+  padding: 5px 10px;
   cursor: pointer;
-  background-color: #f7f7f7;
+}
+
+.home-page {
+  margin-top: 50px;
+}
+
+.home-page input {
+  width: 300px;
+  padding: 10px;
+  margin-right: 10px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+}
+
+.home-page button {
+  padding: 10px 20px;
+  background-color: #007bff;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.tabs {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+.tabs button {
+  background-color: #f0f0f0;
+  border: 1px solid #ddd;
+  padding: 10px 20px;
+  cursor: pointer;
+}
+
+.tabs .active {
+  background-color: #007bff;
+  color: #fff;
+  border: 1px solid #0056b3;
+}
+
+.file-table {
+  margin-top: 20px;
+}
+
+.file-table table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.file-table th, .file-table td {
+  border: 1px solid #ddd;
+  padding: 10px;
+  text-align: left;
+}
+
+.file-table th {
+  background-color: #f4f4f4;
+}
+
+.file-row {
+  border: 1px solid #ddd;
+  padding: 10px;
+  margin-bottom: 5px;
+  cursor: pointer;
 }
 
 .accordion-content {
-  background-color: #e9e9e9;
-}
-
-.carousel {
-  display: flex;
-  flex-direction: column;
-}
-
-.carousel-item {
-  margin: 5px 0;
+  background-color: #f9f9f9;
+  border-top: 1px solid #ddd;
   padding: 10px;
-  border-bottom: 1px solid #ccc;
-}
-
-.carousel-item:last-child {
-  border-bottom: none;
+  margin-top: 5px;
 }
 ```
 
-### 4. Backend Integration (Flask)
+### 4. Running the Application
 
-Ensure your Flask backend provides the necessary data for the "Accessibility Issues" tab. The data should include fields like problem, criticality, fix, description, help, help link, tags, and id.
+After making these changes, start your React development server and ensure the Flask backend is running to handle the data requests.
 
-```python
-@app.route('/accessibility-data', methods=['GET'])
-def accessibility_data():
-    url = request.args.get('url')
-    # Fetch accessibility data for the URL
-    accessibility_data = [
-        {
-            "problem": "Missing alt attribute",
-            "criticality": "High",
-            "fix": "Add alt attribute",
-            "description": "Image elements should have an alt attribute to provide alternative text.",
-            "help": "Adding alternative text helps visually impaired users understand the content.",
-            "helpLink": "https://example.com/help/missing-alt",
-            "tags": ["image", "accessibility"],
-            "id": "101"
-        },
-        # Add more sample data as needed
-    ]
-    return jsonify(accessibility_data), 200
-```
-
-### 5. Running the Application
-
-With these changes in place:
-
-- **Start your React development server**: `npm start`.
-- **Run your Flask backend**: `python your_flask_app.py`.
+- **React Development Server:** Use `npm start`.
+- **Flask Backend:** Run your Flask app with `python your_flask_app.py`.
 
 ### Conclusion
 
-This implementation provides a functional "Accessibility Issues" tab with a list view for summary data and an accordion design that expands to reveal detailed information in a carousel format. Each row in the list can be clicked to show more information, enhancing user experience by providing both high-level and detailed views of accessibility issues. This interactive design helps users quickly understand the criticality of issues and the steps needed to resolve them.
+With these updates, your application will display a list of accessibility issues in the "Accessibility Issues" tab. Each issue will show a brief summary, and clicking on a row will expand it to reveal detailed information in an accordion-style card. This approach provides a clean and user-friendly way to present detailed accessibility information and enhances the usability of your accessibility checker tool.
