@@ -1,0 +1,324 @@
+Based on the updated project details, you are building an accessibility checker with specific UI components in your SonarQube-like dashboard. Below, I'll adjust the React implementation to reflect these changes, adding the "Home" and "Reports" buttons in the main menu and two tabs in the reports page: "Performance and SEO" and "Accessibility Issues."
+
+### 1. Project Setup
+
+Ensure you have a basic React project set up. If you haven't done this already, follow the setup steps from before using `create-react-app`.
+
+### 2. Updated Project Structure
+
+Inside your `src` folder, structure your components as follows:
+
+```
+src
+|-- components
+|   |-- Dashboard.js
+|   |-- MainMenu.js
+|   |-- ReportsPage.js
+|   |-- Tabs.js
+|   |-- FileTable.js
+|   |-- FileRow.js
+|-- App.js
+|-- App.css
+```
+
+### 3. Implementing the Components
+
+#### `App.js`
+
+This file will remain the central application component, managing the navigation between different pages:
+
+```jsx
+import React, { useState } from 'react';
+import './App.css';
+import Dashboard from './components/Dashboard';
+import ReportsPage from './components/ReportsPage';
+
+function App() {
+  const [currentPage, setCurrentPage] = useState('home');
+
+  return (
+    <div className="App">
+      <Dashboard onNavigate={setCurrentPage} />
+      {currentPage === 'home' ? (
+        <div>Welcome to the Accessibility Checker Home Page!</div>
+      ) : (
+        <ReportsPage />
+      )}
+    </div>
+  );
+}
+
+export default App;
+```
+
+#### `Dashboard.js`
+
+This component now includes the main menu with "Home" and "Reports" buttons. It also serves as a navigation bar.
+
+```jsx
+import React from 'react';
+import MainMenu from './MainMenu';
+
+function Dashboard({ onNavigate }) {
+  return (
+    <div className="dashboard">
+      <header className="dashboard-header">
+        <h2>Accessibility Checker</h2>
+        <MainMenu onNavigate={onNavigate} />
+      </header>
+    </div>
+  );
+}
+
+export default Dashboard;
+```
+
+#### `MainMenu.js`
+
+This component renders the "Home" and "Reports" buttons for navigation.
+
+```jsx
+import React from 'react';
+
+function MainMenu({ onNavigate }) {
+  return (
+    <nav className="main-menu">
+      <button onClick={() => onNavigate('home')}>Home</button>
+      <button onClick={() => onNavigate('reports')}>Reports</button>
+    </nav>
+  );
+}
+
+export default MainMenu;
+```
+
+#### `ReportsPage.js`
+
+This component represents the Reports page with two tabs: "Performance and SEO" and "Accessibility Issues."
+
+```jsx
+import React, { useState } from 'react';
+import Tabs from './Tabs';
+import FileTable from './FileTable';
+
+function ReportsPage() {
+  const [activeTab, setActiveTab] = useState('performance');
+
+  return (
+    <div className="reports-page">
+      <Tabs activeTab={activeTab} onTabChange={setActiveTab} />
+      {activeTab === 'performance' ? (
+        <FileTable tab="performance" />
+      ) : (
+        <FileTable tab="accessibility" />
+      )}
+    </div>
+  );
+}
+
+export default ReportsPage;
+```
+
+#### `Tabs.js`
+
+This component is for switching between the "Performance and SEO" and "Accessibility Issues" tabs.
+
+```jsx
+import React from 'react';
+
+function Tabs({ activeTab, onTabChange }) {
+  return (
+    <div className="tabs">
+      <button
+        className={activeTab === 'performance' ? 'active' : ''}
+        onClick={() => onTabChange('performance')}
+      >
+        Performance and SEO
+      </button>
+      <button
+        className={activeTab === 'accessibility' ? 'active' : ''}
+        onClick={() => onTabChange('accessibility')}
+      >
+        Accessibility Issues
+      </button>
+    </div>
+  );
+}
+
+export default Tabs;
+```
+
+#### `FileTable.js`
+
+This component can now render different data based on the active tab. You might have different datasets for performance and accessibility issues.
+
+```jsx
+import React from 'react';
+import FileRow from './FileRow';
+
+const performanceFiles = [
+  { name: 'App.js', lines: 100, bugs: 0, vulnerabilities: 0, codeSmells: 1, coverage: 75, duplications: 0 },
+  // Add more performance-related files here
+];
+
+const accessibilityFiles = [
+  { name: 'index.html', lines: 20, issues: 2 },
+  { name: 'style.css', lines: 15, issues: 1 },
+  // Add more accessibility-related files here
+];
+
+function FileTable({ tab }) {
+  const files = tab === 'performance' ? performanceFiles : accessibilityFiles;
+
+  return (
+    <div className="file-table">
+      <table>
+        <thead>
+          <tr>
+            <th>File</th>
+            <th>Lines of Code</th>
+            {tab === 'performance' ? (
+              <>
+                <th>Bugs</th>
+                <th>Vulnerabilities</th>
+                <th>Code Smells</th>
+                <th>Coverage</th>
+                <th>Duplications</th>
+              </>
+            ) : (
+              <th>Accessibility Issues</th>
+            )}
+          </tr>
+        </thead>
+        <tbody>
+          {files.map((file, index) => (
+            <FileRow key={index} file={file} tab={tab} />
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+export default FileTable;
+```
+
+#### `FileRow.js`
+
+This component will adapt the row output based on the tab.
+
+```jsx
+import React from 'react';
+
+function FileRow({ file, tab }) {
+  return (
+    <tr>
+      <td>{file.name}</td>
+      <td>{file.lines}</td>
+      {tab === 'performance' ? (
+        <>
+          <td>{file.bugs}</td>
+          <td>{file.vulnerabilities}</td>
+          <td>{file.codeSmells}</td>
+          <td>{file.coverage}%</td>
+          <td>{file.duplications}%</td>
+        </>
+      ) : (
+        <td>{file.issues}</td>
+      )}
+    </tr>
+  );
+}
+
+export default FileRow;
+```
+
+### 4. Styling with CSS (`App.css`)
+
+Update the CSS to reflect the changes and to add styles for the tabs and navigation:
+
+```css
+.App {
+  font-family: Arial, sans-serif;
+  text-align: center;
+  margin: 20px;
+}
+
+.dashboard-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background-color: #f4f4f4;
+  padding: 10px 20px;
+  border-bottom: 1px solid #ddd;
+}
+
+.dashboard-header h2 {
+  margin: 0;
+}
+
+.main-menu {
+  display: flex;
+  gap: 10px;
+}
+
+.main-menu button {
+  background-color: #fff;
+  border: 1px solid #ddd;
+  padding: 5px 10px;
+  cursor: pointer;
+}
+
+.tabs {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+.tabs button {
+  background-color: #f0f0f0;
+  border: 1px solid #ddd;
+  padding: 10px 20px;
+  cursor: pointer;
+}
+
+.tabs .active {
+  background-color: #007bff;
+  color: #fff;
+  border: 1px solid #0056b3;
+}
+
+.file-table {
+  margin-top: 20px;
+}
+
+.file-table table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.file-table th, .file-table td {
+  border: 1px solid #ddd;
+  padding: 10px;
+  text-align: left;
+}
+
+.file-table th {
+  background-color: #f4f4f4;
+}
+```
+
+### 5. Running the Application
+
+After creating these files and ensuring your React development environment is set up correctly, start the app with:
+
+```bash
+npm start
+```
+
+This command will start the local development server, and you should see a SonarQube-like dashboard tailored to the accessibility checker context, with navigation and tab features for the "Performance and SEO" and "Accessibility Issues" views.
+
+### Conclusion
+
+This updated implementation better aligns with your project requirements for building an accessibility checker interface. The use of React components for structure and dynamic content rendering will make it easier to extend and maintain the application as more features are added.
