@@ -1,0 +1,8 @@
+        // If the predicates list is not empty, apply them to the query
+        if (!predicates.isEmpty()) {
+            cq.where(cb.and(predicates.toArray(new Predicate[0])));
+        }
+
+        // Execute the query and return the results
+        TypedQuery<SignOffDetails> query = entityManager.createQuery(cq);
+        return query.getResultList();
