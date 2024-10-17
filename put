@@ -1,0 +1,25 @@
+import java.time.OffsetDateTime;
+import java.time.LocalTime;
+import java.util.List;
+import java.util.Optional;
+import javax.persistence.criteria.CriteriaBuilder;
+import javax.persistence.criteria.Predicate;
+import javax.persistence.criteria.Root;
+
+public class PredicateUtils {
+
+    // Generic method to handle date comparisons for any field
+    public static void addDateRangePredicate(Optional<OffsetDateTime> dateOptional, 
+                                             CriteriaBuilder cb, 
+                                             Root<SignOffDetails> root, 
+                                             List<Predicate> predicates, 
+                                             String fieldName) {
+        dateOptional.ifPresent(date -> {
+            OffsetDateTime startOfDay = date.with(LocalTime.MIN);  // Start of the day
+            OffsetDateTime endOfDay = date.with(LocalTime.MAX);    // End of the day
+
+            // Add a between predicate to ignore the time part
+            predicates.add(cb.between(root.get(fieldName), startOfDay, endOfDay));
+        });
+    }
+}
