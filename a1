@@ -1,17 +1,25 @@
-    public static void addEqualsPredicateForDate(Optional<String> timestampOptional,
-                                                 DateTimeUtils dateTimeUtils,
-                                                 CriteriaBuilder cb,
-                                                 Root<SignOffDetails> root,
-                                                 List<Predicate> predicates,
-                                                 String fieldName) {
-        timestampOptional.ifPresent(timestamp -> {
-            // Parse the entered timestamp to the desired format using parseWithDelimiterLBD
-            OffsetDateTime parsedDate = dateTimeUtils.parseWithDelimiterLBD(timestamp);
+public static void addDateEqualsPredicateForLocalDate(Optional<LocalDate> localDateOptional, 
+                                                          CriteriaBuilder cb, 
+                                                          Root<SignOffDetails> root, 
+                                                          List<Predicate> predicates, 
+                                                          String fieldName) {
+        localDateOptional.ifPresent(localDate -> {
+            // Convert LocalDate to OffsetDateTime at the start of the day with UTC
+            OffsetDateTime dateAtStartOfDay = localDate.atTime(LocalTime.MIN).atOffset(ZoneOffset.UTC);
 
-            // Offset the parsed date to UTC
-            OffsetDateTime utcDate = parsedDate.withOffsetSameInstant(ZoneOffset.UTC);
+            // Debugging: Print the OffsetDateTime for verification
+            System.out.println("Converted LocalDate to OffsetDateTime (start of day UTC): " + dateAtStartOfDay);
 
-            // Use cb.equals() to compare the UTC timestamp with the database field
-            predicates.add(cb.equal(root.get(fieldName), utcDate));
+            // Use the DATE() function to extract the date part from the OffsetDateTime in the database
+            predicates.add(cb.equal(
+                cb.function("DATE", LocalDate.class, root.get(fieldName)),  // Extract date part from OffsetDateTime
+                dateAtStartOfDay.toLocalDate()  // Compare only the LocalDate part of OffsetDateTime
+            ));
         });
     }
+
+
+
+----
+
+    Optional<LocalDate> businessValidDateFromOptional = dateTimeUtils.parseWithDelimiterLBD(filter.getBusinessValidDateFrom());
