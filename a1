@@ -1,0 +1,17 @@
+    public static void addEqualsPredicateForDate(Optional<String> timestampOptional,
+                                                 DateTimeUtils dateTimeUtils,
+                                                 CriteriaBuilder cb,
+                                                 Root<SignOffDetails> root,
+                                                 List<Predicate> predicates,
+                                                 String fieldName) {
+        timestampOptional.ifPresent(timestamp -> {
+            // Parse the entered timestamp to the desired format using parseWithDelimiterLBD
+            OffsetDateTime parsedDate = dateTimeUtils.parseWithDelimiterLBD(timestamp);
+
+            // Offset the parsed date to UTC
+            OffsetDateTime utcDate = parsedDate.withOffsetSameInstant(ZoneOffset.UTC);
+
+            // Use cb.equals() to compare the UTC timestamp with the database field
+            predicates.add(cb.equal(root.get(fieldName), utcDate));
+        });
+    }
