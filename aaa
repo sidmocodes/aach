@@ -1,6 +1,2 @@
 Optional<OffsetDateTime> businessValidDateFromOptional = dateTimeUtils.convertToDateTime(filter.getBusinessValidDateFrom());
-
-    // Check if the Optional contains a value, and if so, add it to the predicates
-    businessValidDateFromOptional.ifPresent(businessValidDateFrom -> {
-        predicates.add(cb.greaterThanOrEqualTo(signOffRoot.get("businessValidFrom"), businessValidDateFrom));
-    });
+    PredicateUtils.addDateRangePredicate(businessValidDateFromOptional, cb, signOffRoot, predicates, "businessValidDate");
