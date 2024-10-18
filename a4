@@ -1,0 +1,31 @@
+import java.time.LocalDate;
+import java.time.LocalTime;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
+import java.util.Optional;
+import javax.persistence.criteria.CriteriaBuilder;
+import javax.persistence.criteria.Predicate;
+import javax.persistence.criteria.Root;
+
+public class PredicateUtils {
+
+    // Method to compare LocalDate with OffsetDateTime in the DB without using the DATE function
+    public void addOffsetDateTimePredicateForLocalDate(Optional<LocalDate> localDateOptional, 
+                                                       CriteriaBuilder cb, 
+                                                       Root<SignOffDetails> root, 
+                                                       List<Predicate> predicates, 
+                                                       String fieldName) {
+        localDateOptional.ifPresent(localDate -> {
+            // Convert LocalDate to OffsetDateTime (start of day and end of day)
+            OffsetDateTime startOfDay = localDate.atTime(LocalTime.MIN).atOffset(ZoneOffset.UTC);  // 00:00:00 of the date in UTC
+            OffsetDateTime endOfDay = localDate.atTime(LocalTime.MAX).atOffset(ZoneOffset.UTC);    // 23:59:59.999 of the date in UTC
+
+            // Debugging: Print the start and end of day for verification
+            System.out.println("Start of Day (UTC): " + startOfDay);
+            System.out.println("End of Day (UTC): " + endOfDay);
+
+            // Add the between predicate to check if the businessValidFrom falls within the start and end of the day
+            predicates.add(cb.between(root.get(fieldName), startOfDay, endOfDay));
+        });
+    }
+}
