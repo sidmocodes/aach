@@ -1,0 +1,21 @@
+public List<SignOffDetails> fetchFilteredSignoffs(SignOffFilter filter) {
+    CriteriaBuilder cb = entityManager.getCriteriaBuilder();
+    CriteriaQuery<SignOffDetails> cq = cb.createQuery(SignOffDetails.class);
+    Root<SignOffDetails> signOffRoot = cq.from(SignOffDetails.class);
+
+    List<Predicate> predicates = new ArrayList<>();
+
+    // Instantiate PredicateUtils
+    PredicateUtils predicateUtils = new PredicateUtils();
+
+    // Use the parseWithDelimiterLBD function to get the LocalDate
+    Optional<LocalDate> businessValidDateFromOptional = dateTimeUtils.parseWithDelimiterLBD(filter.getBusinessValidDateFrom());
+    
+    // Convert the LocalDate to OffsetDateTime and add the between predicate
+    predicateUtils.addOffsetDateTimePredicateForLocalDate(businessValidDateFromOptional, cb, signOffRoot, predicates, "businessValidFrom");
+
+    // Add more fields and comparisons as necessary...
+
+    cq.where(cb.and(predicates.toArray(new Predicate[0])));
+    return entityManager.createQuery(cq).getResultList();
+}
