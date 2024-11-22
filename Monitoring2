@@ -1,0 +1,181 @@
+Here’s a modern and clean implementation for monitoring HikariCP in a Spring Boot application, using the latest best practices for Java development.
+
+Modern HikariCP Monitoring Implementation
+
+This approach utilizes:
+	•	Dependency Injection: Using Spring Boot’s @Component.
+	•	Scheduler for Monitoring: Using @Scheduled for periodic health checks.
+	•	Functional and Clear Coding Style: Following modern Java conventions.
+
+1. Monitor Class
+
+The monitor class leverages the HikariCP metrics exposed by HikariDataSource. It uses scheduled tasks to log metrics and raise alerts.
+
+import com.zaxxer.hikari.HikariDataSource;
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.stereotype.Component;
+
+import java.sql.Connection;
+import java.sql.SQLException;
+
+@Component
+public class HikariCPMonitor {
+
+    private final HikariDataSource hikariDataSource;
+
+    public HikariCPMonitor(HikariDataSource hikariDataSource) {
+        this.hikariDataSource = hikariDataSource;
+    }
+
+    @Scheduled(fixedRate = 60000) // Run every 60 seconds
+    public void monitorConnectionPool() {
+        int totalConnections = hikariDataSource.getHikariConfigMXBean().getMaximumPoolSize();
+        int activeConnections = hikariDataSource.getHikariConfigMXBean().getActiveConnections();
+        int idleConnections = hikariDataSource.getHikariConfigMXBean().getIdleConnections();
+
+        logPoolStatus(totalConnections, activeConnections, idleConnections);
+
+        if (totalConnections == 0) {
+            raiseAlert("HikariCP pool is down. No connections available.");
+        } else if (activeConnections == totalConnections && idleConnections == 0) {
+            raiseAlert("HikariCP pool is saturated. All connections are in use.");
+        }
+
+        validateDatabaseConnection();
+    }
+
+    private void logPoolStatus(int total, int active, int idle) {
+        System.out.printf("HikariCP Status: Total=%d, Active=%d, Idle=%d%n", total, active, idle);
+    }
+
+    private void validateDatabaseConnection() {
+        try (Connection connection = hikariDataSource.getConnection()) {
+            if (!connection.isValid(2)) {
+                raiseAlert("Database connection is not valid.");
+            }
+        } catch (SQLException e) {
+            raiseAlert("Error while validating database connection: " + e.getMessage());
+        }
+    }
+
+    private void raiseAlert(String message) {
+        System.err.println("[ALERT] " + message);
+        // Optionally integrate with an alerting service (e.g., email, Slack)
+    }
+}
+
+2. Spring Boot Configuration
+
+Ensure that HikariCP is configured in your application. Add the required configurations in application.yml or application.properties.
+
+Example Configuration (application.yml):
+
+spring:
+  datasource:
+    url: jdbc:mysql://localhost:3306/your_database
+    username: your_username
+    password: your_password
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 5
+      idle-timeout: 30000
+      connection-timeout: 30000
+      validation-timeout: 2000
+      connection-test-query: SELECT 1
+
+3. Optional: Alerting Service
+
+You can integrate an alerting mechanism, such as email or logging to external monitoring tools like Prometheus or Grafana, for better observability.
+
+Email Alerting Example:
+	1.	Mail Configuration (application.yml):
+
+spring:
+  mail:
+    host: smtp.example.com
+    port: 587
+    username: your-email@example.com
+    password: your-email-password
+    properties:
+      mail:
+        smtp:
+          auth: true
+          starttls:
+            enable: true
+
+
+	2.	Email Alerting Service:
+
+import org.springframework.mail.javamail.JavaMailSender;
+import org.springframework.mail.javamail.MimeMessageHelper;
+import org.springframework.stereotype.Service;
+
+import javax.mail.MessagingException;
+import javax.mail.internet.MimeMessage;
+
+@Service
+public class EmailAlertService {
+
+    private final JavaMailSender mailSender;
+
+    public EmailAlertService(JavaMailSender mailSender) {
+        this.mailSender = mailSender;
+    }
+
+    public void sendEmailAlert(String subject, String messageBody) {
+        try {
+            MimeMessage message = mailSender.createMimeMessage();
+            MimeMessageHelper helper = new MimeMessageHelper(message, true);
+            helper.setTo("admin@example.com"); // Replace with the actual recipient
+            helper.setSubject(subject);
+            helper.setText(messageBody, true);
+            mailSender.send(message);
+            System.out.println("Alert email sent successfully.");
+        } catch (MessagingException e) {
+            System.err.println("Failed to send alert email: " + e.getMessage());
+        }
+    }
+}
+
+
+	3.	Integrate Email Alerting into the Monitor:
+Update the raiseAlert method to use the EmailAlertService:
+
+@Component
+public class HikariCPMonitor {
+
+    private final HikariDataSource hikariDataSource;
+    private final EmailAlertService emailAlertService;
+
+    public HikariCPMonitor(HikariDataSource hikariDataSource, EmailAlertService emailAlertService) {
+        this.hikariDataSource = hikariDataSource;
+        this.emailAlertService = emailAlertService;
+    }
+
+    private void raiseAlert(String message) {
+        System.err.println("[ALERT] " + message);
+        emailAlertService.sendEmailAlert("HikariCP Alert", message);
+    }
+}
+
+4. Testing
+
+	1.	Simulate a Failure:
+	•	Stop the database to simulate a connection failure.
+	•	Observe the logs or email alerts for errors.
+	2.	Monitor Saturation:
+	•	Write a test that exhausts all database connections.
+	•	Verify that the alert for pool saturation is triggered.
+
+Advantages of This Implementation
+
+	1.	Lightweight:
+	•	Only runs once every 60 seconds.
+	•	Uses the built-in Spring scheduler.
+	2.	Easy to Extend:
+	•	You can integrate with external monitoring tools or enhance the alerting mechanism.
+	3.	Real-Time Feedback:
+	•	Immediate detection of issues like connection pool saturation or database unavailability.
+
+This modernized approach ensures that your HikariCP monitoring solution is efficient, maintainable, and integrates seamlessly into your Spring Boot application.
