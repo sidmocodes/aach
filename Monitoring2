@@ -1,181 +1,101 @@
-Here’s a modern and clean implementation for monitoring HikariCP in a Spring Boot application, using the latest best practices for Java development.
-
-Modern HikariCP Monitoring Implementation
-
-This approach utilizes:
-	•	Dependency Injection: Using Spring Boot’s @Component.
-	•	Scheduler for Monitoring: Using @Scheduled for periodic health checks.
-	•	Functional and Clear Coding Style: Following modern Java conventions.
-
-1. Monitor Class
-
-The monitor class leverages the HikariCP metrics exposed by HikariDataSource. It uses scheduled tasks to log metrics and raise alerts.
+Certainly! Below is a modern Java code example that monitors a HikariCP connection pool and sends a DBAlert when the pool is down. The code utilizes a scheduled executor to periodically check the health of the connection pool.
 
 import com.zaxxer.hikari.HikariDataSource;
-import org.springframework.scheduling.annotation.Scheduled;
-import org.springframework.stereotype.Component;
+import com.zaxxer.hikari.pool.HikariPoolMXBean;
 
 import java.sql.Connection;
 import java.sql.SQLException;
+import java.util.concurrent.*;
 
-@Component
-public class HikariCPMonitor {
+public class HikariPoolMonitor {
 
-    private final HikariDataSource hikariDataSource;
+    private final HikariDataSource dataSource;
+    private final ScheduledExecutorService scheduler;
 
-    public HikariCPMonitor(HikariDataSource hikariDataSource) {
-        this.hikariDataSource = hikariDataSource;
+    public HikariPoolMonitor(HikariDataSource dataSource) {
+        this.dataSource = dataSource;
+        this.scheduler = Executors.newSingleThreadScheduledExecutor();
     }
 
-    @Scheduled(fixedRate = 60000) // Run every 60 seconds
-    public void monitorConnectionPool() {
-        int totalConnections = hikariDataSource.getHikariConfigMXBean().getMaximumPoolSize();
-        int activeConnections = hikariDataSource.getHikariConfigMXBean().getActiveConnections();
-        int idleConnections = hikariDataSource.getHikariConfigMXBean().getIdleConnections();
-
-        logPoolStatus(totalConnections, activeConnections, idleConnections);
-
-        if (totalConnections == 0) {
-            raiseAlert("HikariCP pool is down. No connections available.");
-        } else if (activeConnections == totalConnections && idleConnections == 0) {
-            raiseAlert("HikariCP pool is saturated. All connections are in use.");
-        }
-
-        validateDatabaseConnection();
+    public void startMonitoring() {
+        scheduler.scheduleAtFixedRate(this::checkPoolHealth, 0, 1, TimeUnit.MINUTES);
     }
 
-    private void logPoolStatus(int total, int active, int idle) {
-        System.out.printf("HikariCP Status: Total=%d, Active=%d, Idle=%d%n", total, active, idle);
+    public void stopMonitoring() {
+        scheduler.shutdown();
     }
 
-    private void validateDatabaseConnection() {
-        try (Connection connection = hikariDataSource.getConnection()) {
-            if (!connection.isValid(2)) {
-                raiseAlert("Database connection is not valid.");
-            }
-        } catch (SQLException e) {
-            raiseAlert("Error while validating database connection: " + e.getMessage());
-        }
-    }
-
-    private void raiseAlert(String message) {
-        System.err.println("[ALERT] " + message);
-        // Optionally integrate with an alerting service (e.g., email, Slack)
-    }
-}
-
-2. Spring Boot Configuration
-
-Ensure that HikariCP is configured in your application. Add the required configurations in application.yml or application.properties.
-
-Example Configuration (application.yml):
-
-spring:
-  datasource:
-    url: jdbc:mysql://localhost:3306/your_database
-    username: your_username
-    password: your_password
-    driver-class-name: com.mysql.cj.jdbc.Driver
-    hikari:
-      maximum-pool-size: 10
-      minimum-idle: 5
-      idle-timeout: 30000
-      connection-timeout: 30000
-      validation-timeout: 2000
-      connection-test-query: SELECT 1
-
-3. Optional: Alerting Service
-
-You can integrate an alerting mechanism, such as email or logging to external monitoring tools like Prometheus or Grafana, for better observability.
-
-Email Alerting Example:
-	1.	Mail Configuration (application.yml):
-
-spring:
-  mail:
-    host: smtp.example.com
-    port: 587
-    username: your-email@example.com
-    password: your-email-password
-    properties:
-      mail:
-        smtp:
-          auth: true
-          starttls:
-            enable: true
-
-
-	2.	Email Alerting Service:
-
-import org.springframework.mail.javamail.JavaMailSender;
-import org.springframework.mail.javamail.MimeMessageHelper;
-import org.springframework.stereotype.Service;
-
-import javax.mail.MessagingException;
-import javax.mail.internet.MimeMessage;
-
-@Service
-public class EmailAlertService {
-
-    private final JavaMailSender mailSender;
-
-    public EmailAlertService(JavaMailSender mailSender) {
-        this.mailSender = mailSender;
-    }
-
-    public void sendEmailAlert(String subject, String messageBody) {
+    private void checkPoolHealth() {
         try {
-            MimeMessage message = mailSender.createMimeMessage();
-            MimeMessageHelper helper = new MimeMessageHelper(message, true);
-            helper.setTo("admin@example.com"); // Replace with the actual recipient
-            helper.setSubject(subject);
-            helper.setText(messageBody, true);
-            mailSender.send(message);
-            System.out.println("Alert email sent successfully.");
-        } catch (MessagingException e) {
-            System.err.println("Failed to send alert email: " + e.getMessage());
+            // Attempt to retrieve the HikariPoolMXBean for pool statistics
+            HikariPoolMXBean poolMXBean = dataSource.getHikariPoolMXBean();
+
+            // Retrieve pool statistics
+            int totalConnections = poolMXBean.getTotalConnections();
+            int activeConnections = poolMXBean.getActiveConnections();
+            int idleConnections = poolMXBean.getIdleConnections();
+            int threadsAwaitingConnection = poolMXBean.getThreadsAwaitingConnection();
+
+            // Log or process the pool statistics as needed
+            System.out.println("HikariCP Pool Status:");
+            System.out.println("Total Connections: " + totalConnections);
+            System.out.println("Active Connections: " + activeConnections);
+            System.out.println("Idle Connections: " + idleConnections);
+            System.out.println("Threads Awaiting Connection: " + threadsAwaitingConnection);
+
+            // Try to obtain a connection to verify pool health
+            try (Connection connection = dataSource.getConnection()) {
+                // Connection obtained successfully
+                System.out.println("Connection pool is healthy.");
+            } catch (SQLException e) {
+                // Failed to obtain a connection, pool might be down
+                System.err.println("Failed to obtain a connection from the pool.");
+                sendDBAlert();
+            }
+
+        } catch (Exception e) {
+            // Exception occurred while checking pool health
+            System.err.println("Exception while checking pool health: " + e.getMessage());
+            sendDBAlert();
         }
     }
-}
 
-
-	3.	Integrate Email Alerting into the Monitor:
-Update the raiseAlert method to use the EmailAlertService:
-
-@Component
-public class HikariCPMonitor {
-
-    private final HikariDataSource hikariDataSource;
-    private final EmailAlertService emailAlertService;
-
-    public HikariCPMonitor(HikariDataSource hikariDataSource, EmailAlertService emailAlertService) {
-        this.hikariDataSource = hikariDataSource;
-        this.emailAlertService = emailAlertService;
-    }
-
-    private void raiseAlert(String message) {
-        System.err.println("[ALERT] " + message);
-        emailAlertService.sendEmailAlert("HikariCP Alert", message);
+    private void sendDBAlert() {
+        // Implement your DBAlert sending logic here
+        System.out.println("Sending DBAlert: Connection pool is down.");
+        DBAlert.send("Connection pool is down.");
     }
 }
 
-4. Testing
+Usage:
 
-	1.	Simulate a Failure:
-	•	Stop the database to simulate a connection failure.
-	•	Observe the logs or email alerts for errors.
-	2.	Monitor Saturation:
-	•	Write a test that exhausts all database connections.
-	•	Verify that the alert for pool saturation is triggered.
+// Initialize your HikariDataSource
+HikariDataSource dataSource = new HikariDataSource();
+// Configure your dataSource as needed
 
-Advantages of This Implementation
+// Initialize and start the monitor
+HikariPoolMonitor poolMonitor = new HikariPoolMonitor(dataSource);
+poolMonitor.startMonitoring();
 
-	1.	Lightweight:
-	•	Only runs once every 60 seconds.
-	•	Uses the built-in Spring scheduler.
-	2.	Easy to Extend:
-	•	You can integrate with external monitoring tools or enhance the alerting mechanism.
-	3.	Real-Time Feedback:
-	•	Immediate detection of issues like connection pool saturation or database unavailability.
+// Remember to stop the monitor when shutting down your application
+// poolMonitor.stopMonitoring();
 
-This modernized approach ensures that your HikariCP monitoring solution is efficient, maintainable, and integrates seamlessly into your Spring Boot application.
+Explanation:
+	•	HikariPoolMonitor Class: Encapsulates the monitoring logic.
+	•	Constructor: Accepts a HikariDataSource instance.
+	•	startMonitoring(): Starts the scheduled task to check pool health every minute.
+	•	stopMonitoring(): Stops the scheduled monitoring task.
+	•	checkPoolHealth(): Attempts to fetch pool statistics and acquire a connection to check if the pool is operational. If it fails, it triggers the sendDBAlert() method.
+	•	sendDBAlert(): Placeholder method where you implement the logic to send a DBAlert.
+	•	Modern Practices Used:
+	•	ScheduledExecutorService: For scheduling periodic tasks instead of using traditional threads.
+	•	Try-With-Resources: Ensures that the Connection object is closed automatically.
+	•	Lambda Expressions: Can be used if you’re using Java 8 or higher to make the code more concise (not shown here but applicable).
+
+Note: Ensure that the DBAlert class has a send(String message) method implemented to handle the alerting mechanism.
+
+Dependencies:
+	•	HikariCP library
+	•	Your existing DBAlert class
+
+This code should effectively monitor your HikariCP connection pool and send an alert whenever it detects that the pool is down.
