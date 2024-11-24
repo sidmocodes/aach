@@ -1,0 +1,49 @@
+package com.example.monitoring;
+
+public class DBAlertService {
+
+    public void sendDbDownAlert(String message) {
+        // Implement your alerting logic here.
+        // For example, send an email, log to a monitoring system, or trigger a webhook.
+        // Ensure that this method does not depend on the Spring application context.
+
+        // Example: Simple console output (replace with actual alerting mechanism)
+        System.err.println("DBAlertService: " + message);
+
+        // If you have an external alerting system, you can integrate it here.
+        // For example, sending an HTTP POST request to an alerting API.
+
+        // If you need to send an email, use standard JavaMail API instead of Spring's JavaMailSender.
+        // Example:
+        // sendEmail("Database Down Alert", message);
+    }
+
+    // Optional: Implement a method to send emails using JavaMail API (without Spring dependencies)
+    /*
+    private void sendEmail(String subject, String body) throws MessagingException {
+        // Set up mail server properties
+        Properties props = new Properties();
+        props.put("mail.smtp.host", "smtp.example.com"); // Replace with your SMTP host
+        props.put("mail.smtp.port", "587"); // Replace with your SMTP port
+        props.put("mail.smtp.auth", "true");
+        props.put("mail.smtp.starttls.enable", "true");
+
+        // Create a session with an authenticator
+        Session session = Session.getInstance(props, new javax.mail.Authenticator() {
+            protected PasswordAuthentication getPasswordAuthentication() {
+                return new PasswordAuthentication("your-email@example.com", "your-email-password");
+            }
+        });
+
+        // Compose the message
+        Message message = new MimeMessage(session);
+        message.setFrom(new InternetAddress("your-email@example.com"));
+        message.setRecipients(Message.RecipientType.TO, InternetAddress.parse("recipient@example.com"));
+        message.setSubject(subject);
+        message.setText(body);
+
+        // Send the message
+        Transport.send(message);
+    }
+    */
+}
