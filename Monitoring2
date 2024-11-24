@@ -1,8 +1,6 @@
 import com.zaxxer.hikari.HikariDataSource;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.sql.Connection;
 import java.sql.SQLException;
@@ -10,35 +8,70 @@ import java.sql.SQLException;
 @Component
 public class HikariCPPoolMonitor {
 
-    private static final Logger logger = LoggerFactory.getLogger(HikariCPPoolMonitor.class);
-
     private final HikariDataSource hikariDataSource;
-    private final EmailAlertService emailAlertService;
+    private final DBAlertService dbAlertService; // Assume this service is defined elsewhere
 
-    public HikariCPPoolMonitor(HikariDataSource hikariDataSource, EmailAlertService emailAlertService) {
+    private volatile boolean previouslyDown = false; // Tracks the previous state of the pool
+
+    public HikariCPPoolMonitor(HikariDataSource hikariDataSource, DBAlertService dbAlertService) {
         this.hikariDataSource = hikariDataSource;
-        this.emailAlertService = emailAlertService;
+        this.dbAlertService = dbAlertService;
     }
 
-    @Scheduled(fixedRate = 60000)
+    @Scheduled(fixedRate = 60000) // Runs every 60 seconds
     public void checkDbPoolStatus() {
+        boolean isPoolDown = false;
+
         try {
+            // Attempt to get a connection from the pool
             try (Connection connection = hikariDataSource.getConnection()) {
                 if (connection == null || connection.isClosed() || !connection.isValid(2)) {
-                    sendAlert("Database pool is down: Unable to acquire a valid connection.");
+                    // Connection is invalid; pool might be down
+                    isPoolDown = true;
                 } else {
-                    logger.info("Database pool is healthy.");
+                    // Connection is valid; pool is up
+                    System.out.println("Database pool is healthy.");
                 }
             } catch (SQLException e) {
-                sendAlert("Database pool is down: " + e.getMessage());
+                // Exception while getting a connection; pool might be down
+                isPoolDown = true;
+                System.err.println("Error while acquiring or validating connection: " + e.getMessage());
             }
         } catch (Exception e) {
-            sendAlert("An error occurred while checking the DB pool: " + e.getMessage());
+            // Unexpected exception; consider the pool down
+            isPoolDown = true;
+            System.err.println("An unexpected error occurred while checking the DB pool: " + e.getMessage());
+        }
+
+        // Determine whether to send alerts based on the current and previous state
+        if (isPoolDown) {
+            if (!previouslyDown) {
+                // Pool just went down; send alert
+                sendDbDownAlert();
+                previouslyDown = true;
+            } else {
+                // Pool is still down; do nothing
+                System.out.println("Database pool remains down; no additional alert sent.");
+            }
+        } else {
+            if (previouslyDown) {
+                // Pool just came back up; send alert
+                sendDbUpAlert();
+                previouslyDown = false;
+            } else {
+                // Pool is up as usual; do nothing
+                System.out.println("Database pool remains healthy.");
+            }
         }
     }
 
-    private void sendAlert(String message) {
-        logger.error("[ALERT] " + message);
-        emailAlertService.sendEmailAlert("Database Pool Alert", message);
+    private void sendDbDownAlert() {
+        System.err.println("[ALERT] Database pool is DOWN.");
+        dbAlertService.sendDbDownAlert(); // Send the down alert using your existing service
+    }
+
+    private void sendDbUpAlert() {
+        System.out.println("[INFO] Database pool is UP.");
+        dbAlertService.sendDbUpAlert(); // Send the up alert using your existing service
     }
 }
