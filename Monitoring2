@@ -1,71 +1,44 @@
 import com.zaxxer.hikari.HikariDataSource;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.sql.Connection;
 import java.sql.SQLException;
 
 @Component
-public class HikariCPMonitor {
+public class HikariCPPoolMonitor {
+
+    private static final Logger logger = LoggerFactory.getLogger(HikariCPPoolMonitor.class);
 
     private final HikariDataSource hikariDataSource;
+    private final EmailAlertService emailAlertService;
 
-    public HikariCPMonitor(HikariDataSource hikariDataSource) {
+    public HikariCPPoolMonitor(HikariDataSource hikariDataSource, EmailAlertService emailAlertService) {
         this.hikariDataSource = hikariDataSource;
+        this.emailAlertService = emailAlertService;
     }
 
-    /**
-     * Scheduled task to monitor the HikariCP connection pool and validate connections.
-     */
-    @Scheduled(fixedRate = 60000) // Runs every 60 seconds
-    public void monitorConnectionPool() {
+    @Scheduled(fixedRate = 60000)
+    public void checkDbPoolStatus() {
         try {
-            checkPoolStatus();
-            validateDatabaseConnection();
-        } catch (Exception e) {
-            raiseAlert("Exception during HikariCP monitoring: " + e.getMessage());
-        }
-    }
-
-    /**
-     * Checks the status of the connection pool (total, active, and idle connections).
-     */
-    private void checkPoolStatus() {
-        int totalConnections = hikariDataSource.getHikariConfigMXBean().getMaximumPoolSize();
-        int activeConnections = hikariDataSource.getHikariConfigMXBean().getActiveConnections();
-        int idleConnections = hikariDataSource.getHikariConfigMXBean().getIdleConnections();
-
-        System.out.printf("HikariCP Status: Total=%d, Active=%d, Idle=%d%n", totalConnections, activeConnections, idleConnections);
-
-        if (totalConnections == 0) {
-            raiseAlert("HikariCP pool appears to be down. No connections available.");
-        } else if (activeConnections == totalConnections && idleConnections == 0) {
-            raiseAlert("HikariCP pool is saturated. No idle connections available.");
-        }
-    }
-
-    /**
-     * Validates database connectivity by acquiring and testing a connection.
-     */
-    private void validateDatabaseConnection() {
-        try (Connection connection = hikariDataSource.getConnection()) {
-            if (!connection.isValid(2)) { // Timeout of 2 seconds
-                raiseAlert("Database connection is not valid.");
-            } else {
-                System.out.println("Database connection validated successfully.");
+            try (Connection connection = hikariDataSource.getConnection()) {
+                if (connection == null || connection.isClosed() || !connection.isValid(2)) {
+                    sendAlert("Database pool is down: Unable to acquire a valid connection.");
+                } else {
+                    logger.info("Database pool is healthy.");
+                }
+            } catch (SQLException e) {
+                sendAlert("Database pool is down: " + e.getMessage());
             }
-        } catch (SQLException e) {
-            raiseAlert("Failed to validate database connection: " + e.getMessage());
+        } catch (Exception e) {
+            sendAlert("An error occurred while checking the DB pool: " + e.getMessage());
         }
     }
 
-    /**
-     * Raises an alert for critical issues.
-     *
-     * @param message Alert message to be logged or sent.
-     */
-    private void raiseAlert(String message) {
-        System.err.println("[ALERT] " + message);
-        // Replace with actual alerting mechanism (e.g., email, Slack, monitoring system)
+    private void sendAlert(String message) {
+        logger.error("[ALERT] " + message);
+        emailAlertService.sendEmailAlert("Database Pool Alert", message);
     }
 }
