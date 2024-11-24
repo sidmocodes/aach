@@ -1,101 +1,71 @@
-Certainly! Below is a modern Java code example that monitors a HikariCP connection pool and sends a DBAlert when the pool is down. The code utilizes a scheduled executor to periodically check the health of the connection pool.
-
 import com.zaxxer.hikari.HikariDataSource;
-import com.zaxxer.hikari.pool.HikariPoolMXBean;
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.stereotype.Component;
 
 import java.sql.Connection;
 import java.sql.SQLException;
-import java.util.concurrent.*;
 
-public class HikariPoolMonitor {
+@Component
+public class HikariCPMonitor {
 
-    private final HikariDataSource dataSource;
-    private final ScheduledExecutorService scheduler;
+    private final HikariDataSource hikariDataSource;
 
-    public HikariPoolMonitor(HikariDataSource dataSource) {
-        this.dataSource = dataSource;
-        this.scheduler = Executors.newSingleThreadScheduledExecutor();
+    public HikariCPMonitor(HikariDataSource hikariDataSource) {
+        this.hikariDataSource = hikariDataSource;
     }
 
-    public void startMonitoring() {
-        scheduler.scheduleAtFixedRate(this::checkPoolHealth, 0, 1, TimeUnit.MINUTES);
-    }
-
-    public void stopMonitoring() {
-        scheduler.shutdown();
-    }
-
-    private void checkPoolHealth() {
+    /**
+     * Scheduled task to monitor the HikariCP connection pool and validate connections.
+     */
+    @Scheduled(fixedRate = 60000) // Runs every 60 seconds
+    public void monitorConnectionPool() {
         try {
-            // Attempt to retrieve the HikariPoolMXBean for pool statistics
-            HikariPoolMXBean poolMXBean = dataSource.getHikariPoolMXBean();
-
-            // Retrieve pool statistics
-            int totalConnections = poolMXBean.getTotalConnections();
-            int activeConnections = poolMXBean.getActiveConnections();
-            int idleConnections = poolMXBean.getIdleConnections();
-            int threadsAwaitingConnection = poolMXBean.getThreadsAwaitingConnection();
-
-            // Log or process the pool statistics as needed
-            System.out.println("HikariCP Pool Status:");
-            System.out.println("Total Connections: " + totalConnections);
-            System.out.println("Active Connections: " + activeConnections);
-            System.out.println("Idle Connections: " + idleConnections);
-            System.out.println("Threads Awaiting Connection: " + threadsAwaitingConnection);
-
-            // Try to obtain a connection to verify pool health
-            try (Connection connection = dataSource.getConnection()) {
-                // Connection obtained successfully
-                System.out.println("Connection pool is healthy.");
-            } catch (SQLException e) {
-                // Failed to obtain a connection, pool might be down
-                System.err.println("Failed to obtain a connection from the pool.");
-                sendDBAlert();
-            }
-
+            checkPoolStatus();
+            validateDatabaseConnection();
         } catch (Exception e) {
-            // Exception occurred while checking pool health
-            System.err.println("Exception while checking pool health: " + e.getMessage());
-            sendDBAlert();
+            raiseAlert("Exception during HikariCP monitoring: " + e.getMessage());
         }
     }
 
-    private void sendDBAlert() {
-        // Implement your DBAlert sending logic here
-        System.out.println("Sending DBAlert: Connection pool is down.");
-        DBAlert.send("Connection pool is down.");
+    /**
+     * Checks the status of the connection pool (total, active, and idle connections).
+     */
+    private void checkPoolStatus() {
+        int totalConnections = hikariDataSource.getHikariConfigMXBean().getMaximumPoolSize();
+        int activeConnections = hikariDataSource.getHikariConfigMXBean().getActiveConnections();
+        int idleConnections = hikariDataSource.getHikariConfigMXBean().getIdleConnections();
+
+        System.out.printf("HikariCP Status: Total=%d, Active=%d, Idle=%d%n", totalConnections, activeConnections, idleConnections);
+
+        if (totalConnections == 0) {
+            raiseAlert("HikariCP pool appears to be down. No connections available.");
+        } else if (activeConnections == totalConnections && idleConnections == 0) {
+            raiseAlert("HikariCP pool is saturated. No idle connections available.");
+        }
+    }
+
+    /**
+     * Validates database connectivity by acquiring and testing a connection.
+     */
+    private void validateDatabaseConnection() {
+        try (Connection connection = hikariDataSource.getConnection()) {
+            if (!connection.isValid(2)) { // Timeout of 2 seconds
+                raiseAlert("Database connection is not valid.");
+            } else {
+                System.out.println("Database connection validated successfully.");
+            }
+        } catch (SQLException e) {
+            raiseAlert("Failed to validate database connection: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Raises an alert for critical issues.
+     *
+     * @param message Alert message to be logged or sent.
+     */
+    private void raiseAlert(String message) {
+        System.err.println("[ALERT] " + message);
+        // Replace with actual alerting mechanism (e.g., email, Slack, monitoring system)
     }
 }
-
-Usage:
-
-// Initialize your HikariDataSource
-HikariDataSource dataSource = new HikariDataSource();
-// Configure your dataSource as needed
-
-// Initialize and start the monitor
-HikariPoolMonitor poolMonitor = new HikariPoolMonitor(dataSource);
-poolMonitor.startMonitoring();
-
-// Remember to stop the monitor when shutting down your application
-// poolMonitor.stopMonitoring();
-
-Explanation:
-	•	HikariPoolMonitor Class: Encapsulates the monitoring logic.
-	•	Constructor: Accepts a HikariDataSource instance.
-	•	startMonitoring(): Starts the scheduled task to check pool health every minute.
-	•	stopMonitoring(): Stops the scheduled monitoring task.
-	•	checkPoolHealth(): Attempts to fetch pool statistics and acquire a connection to check if the pool is operational. If it fails, it triggers the sendDBAlert() method.
-	•	sendDBAlert(): Placeholder method where you implement the logic to send a DBAlert.
-	•	Modern Practices Used:
-	•	ScheduledExecutorService: For scheduling periodic tasks instead of using traditional threads.
-	•	Try-With-Resources: Ensures that the Connection object is closed automatically.
-	•	Lambda Expressions: Can be used if you’re using Java 8 or higher to make the code more concise (not shown here but applicable).
-
-Note: Ensure that the DBAlert class has a send(String message) method implemented to handle the alerting mechanism.
-
-Dependencies:
-	•	HikariCP library
-	•	Your existing DBAlert class
-
-This code should effectively monitor your HikariCP connection pool and send an alert whenever it detects that the pool is down.
