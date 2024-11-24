@@ -1,0 +1,227 @@
+Below is the full implementation of all the scenarios to simulate DB Connection Pool downage, along with instructions on how to invoke and test them in your Spring Boot application. This includes simulating connection pool exhaustion, connection validation failures, and pool misconfiguration.
+
+1. Setup Your Spring Boot Application
+
+Add the required dependencies in pom.xml:
+
+<dependencies>
+    <!-- Spring Boot Starter Data JPA -->
+    <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-data-jpa</artifactId>
+    </dependency>
+
+    <!-- PostgreSQL Driver -->
+    <dependency>
+        <groupId>org.postgresql</groupId>
+        <artifactId>postgresql</artifactId>
+    </dependency>
+
+    <!-- Spring Boot Starter Web -->
+    <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-web</artifactId>
+    </dependency>
+</dependencies>
+
+2. Configure application.properties
+
+Set up basic configurations for the database connection:
+
+# PostgreSQL Connection Configuration
+spring.datasource.url=jdbc:postgresql://localhost:5432/your_database
+spring.datasource.username=your_username
+spring.datasource.password=your_password
+
+# HikariCP Configuration
+spring.datasource.hikari.maximum-pool-size=2
+spring.datasource.hikari.connection-timeout=5000
+spring.datasource.hikari.idle-timeout=10000
+spring.datasource.hikari.max-lifetime=30000
+
+# Enable debug logs for HikariCP
+logging.level.com.zaxxer.hikari=DEBUG
+logging.level.org.postgresql=DEBUG
+
+3. Simulate Connection Pool Downage
+
+Below are the complete implementations for the three scenarios: pool exhaustion, connection validation failures, and pool misconfiguration.
+
+Service for Connection Pool Exhaustion
+
+This service creates multiple threads to execute long-running queries, exhausting the connection pool.
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.stereotype.Service;
+
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+
+@Service
+public class ConnectionPoolExhaustionSimulator {
+
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
+
+    private final ExecutorService executorService = Executors.newFixedThreadPool(10);
+
+    public void simulateConnectionPoolExhaustion() {
+        System.out.println("Starting connection pool exhaustion simulation...");
+
+        // Submit long-running tasks to exhaust the connection pool
+        for (int i = 0; i < 10; i++) {
+            executorService.submit(() -> {
+                try {
+                    System.out.println("Executing long query...");
+                    // Simulate a long-running query (50 seconds)
+                    jdbcTemplate.queryForObject("SELECT pg_sleep(50);", Void.class);
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+            });
+        }
+
+        System.out.println("All tasks submitted. Connection pool should be exhausted.");
+    }
+}
+
+Service for Connection Validation Failures
+
+This service forces the pool to fail validation queries.
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.stereotype.Service;
+
+@Service
+public class ConnectionValidationFailureSimulator {
+
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
+
+    public void simulateValidationFailure() {
+        System.out.println("Simulating validation failure...");
+        try {
+            jdbcTemplate.queryForObject("SELECT 1 FROM invalid_table;", Integer.class);
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+}
+
+Service for Pool Misconfiguration
+
+This service misconfigures the connection pool at runtime.
+
+import com.zaxxer.hikari.HikariDataSource;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
+
+@Service
+public class PoolMisconfigurationSimulator {
+
+    @Autowired
+    private HikariDataSource dataSource;
+
+    public void misconfigurePool() {
+        System.out.println("Misconfiguring the connection pool...");
+        // Deliberately reduce max pool size to an unusable value
+        dataSource.setMaximumPoolSize(0);
+        System.out.println("Pool misconfigured. No connections can be created.");
+    }
+}
+
+4. Controller to Trigger Simulations
+
+Create a REST controller to invoke these simulation methods.
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+@RestController
+public class SimulationController {
+
+    @Autowired
+    private ConnectionPoolExhaustionSimulator exhaustionSimulator;
+
+    @Autowired
+    private ConnectionValidationFailureSimulator validationFailureSimulator;
+
+    @Autowired
+    private PoolMisconfigurationSimulator misconfigurationSimulator;
+
+    @GetMapping("/simulate-pool-exhaustion")
+    public String simulatePoolExhaustion() {
+        exhaustionSimulator.simulateConnectionPoolExhaustion();
+        return "Connection pool exhaustion simulation started.";
+    }
+
+    @GetMapping("/simulate-validation-failure")
+    public String simulateValidationFailure() {
+        validationFailureSimulator.simulateValidationFailure();
+        return "Validation failure simulation completed.";
+    }
+
+    @GetMapping("/misconfigure-pool")
+    public String misconfigurePool() {
+        misconfigurationSimulator.misconfigurePool();
+        return "Pool misconfiguration triggered.";
+    }
+}
+
+5. How to Test the Simulations
+
+Step 1: Start the Application
+
+Run your Spring Boot application in IntelliJ or any IDE.
+
+Step 2: Use the Endpoints
+
+	•	Simulate Connection Pool Exhaustion:
+Visit http://localhost:8080/simulate-pool-exhaustion.
+	•	The pool will be exhausted, and any new connection attempts will timeout.
+	•	Logs will show:
+
+HikariPool-1 - Connection is not available, request timed out after 5000ms.
+
+
+	•	Simulate Connection Validation Failures:
+Visit http://localhost:8080/simulate-validation-failure.
+	•	The pool will fail to validate connections due to the invalid query.
+	•	Logs will show:
+
+HikariPool-1 - Failed to validate connection org.postgresql.jdbc.PgConnection@...
+
+
+	•	Simulate Pool Misconfiguration:
+Visit http://localhost:8080/misconfigure-pool.
+	•	No new connections can be created due to runtime misconfiguration.
+	•	Logs will show:
+
+HikariPool-1 - Connection is not available, request timed out after 5000ms.
+
+6. Cleanup and Restoration
+
+	•	Exhaustion: Let the long-running queries complete, or restart the application.
+	•	Validation Failure: Revert the invalid query configuration if needed.
+	•	Misconfiguration: Restart the application to restore the connection pool settings.
+
+7. Logging
+
+Enable debug logging for HikariCP in application.properties:
+
+logging.level.com.zaxxer.hikari=DEBUG
+logging.level.org.postgresql=DEBUG
+
+This helps observe connection behavior during the simulations.
+
+Summary
+
+	•	Use the REST endpoints to trigger simulations:
+	•	/simulate-pool-exhaustion: Exhaust the connection pool.
+	•	/simulate-validation-failure: Force connection validation failures.
+	•	/misconfigure-pool: Misconfigure the pool.
+	•	Observe HikariCP logs to verify behavior.
+	•	Restart the application to reset configurations after testing.
