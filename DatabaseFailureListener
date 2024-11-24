@@ -1,0 +1,63 @@
+package com.example.monitoring;
+
+import org.springframework.boot.context.event.ApplicationFailedEvent;
+import org.springframework.context.ApplicationListener;
+import org.springframework.stereotype.Component;
+
+@Component
+public class DatabaseFailureListener implements ApplicationListener<ApplicationFailedEvent> {
+
+    private final DBAlertService dbAlertService;
+
+    public DatabaseFailureListener() {
+        this.dbAlertService = new DBAlertService();
+    }
+
+    @Override
+    public void onApplicationEvent(ApplicationFailedEvent event) {
+        Throwable exception = event.getException();
+        Throwable rootCause = findRootCause(exception);
+
+        if (isDatabaseException(rootCause)) {
+            String errorMessage = rootCause.getMessage();
+            sendDbDownAlert("Database connection failed at startup: " + errorMessage);
+            System.err.println("Application failed to start due to database connectivity issues.");
+            System.err.println("Please check your database configuration and ensure that the database server is running.");
+        } else {
+            System.err.println("Application failed to start due to an error: " + rootCause.getMessage());
+        }
+    }
+
+    private boolean isDatabaseException(Throwable exception) {
+        return exception instanceof java.sql.SQLException ||
+               exception instanceof org.springframework.dao.DataAccessException ||
+               (exception.getMessage() != null && (
+                   exception.getMessage().contains("Cannot create PoolableConnectionFactory") ||
+                   exception.getMessage().contains("Communications link failure") ||
+                   exception.getMessage().contains("Access denied for user") ||
+                   exception.getMessage().contains("Connection refused") ||
+                   exception.getMessage().contains("Unknown database") ||
+                   exception.getMessage().contains("Could not get JDBC Connection")
+               ));
+    }
+
+    private Throwable findRootCause(Throwable throwable) {
+        Throwable cause;
+        Throwable result = throwable;
+
+        while ((cause = result.getCause()) != null && result != cause) {
+            result = cause;
+        }
+
+        return result;
+    }
+
+    private void sendDbDownAlert(String message) {
+        System.err.println("[ALERT] " + message);
+        try {
+            dbAlertService.sendDbDownAlert(message);
+        } catch (Exception e) {
+            System.err.println("Failed to send DB alert: " + e.getMessage());
+        }
+    }
+}
