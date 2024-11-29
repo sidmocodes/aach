@@ -1,78 +1,243 @@
+Here’s a rewritten version of the code using HikariPoolMXBean and HikariConfigMXBean for runtime configuration updates and validation. The HikariPoolMXBean is primarily used for monitoring and runtime state validation, while the HikariConfigMXBean is used for updating certain configuration properties dynamically.
+
+Complete Code Implementation
+
+1. Updated UpDbPool Class
+
+This class handles the runtime updates and validation of the HikariCP pool using both HikariPoolMXBean and HikariConfigMXBean.
+
+import com.zaxxer.hikari.HikariConfigMXBean;
 import com.zaxxer.hikari.HikariDataSource;
 import com.zaxxer.hikari.pool.HikariPoolMXBean;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
-import javax.sql.DataSource;
 import java.sql.Connection;
 
 @Component
 public class UpDbPool {
 
     @Autowired
-    private DataSource dataSource; // HikariCP DataSource
-
-    @Autowired
-    private HikariConfigProperties hikariConfigProperties; // Injected Hikari properties
+    private HikariDataSource hikariDataSource;
 
     /**
-     * Resets the Hikari connection pool using values from HikariConfigProperties.
+     * Updates the connection test query at runtime using HikariConfigMXBean.
      */
-    public String resetConnectionPool() {
+    public String updateConnectionTestQuery(String newQuery) {
         try {
-            if (dataSource instanceof HikariDataSource) {
-                HikariDataSource hikariDataSource = (HikariDataSource) dataSource;
-
-                // Close the existing pool
-                hikariDataSource.close();
-
-                // Reinitialize the pool using HikariConfigProperties
-                hikariDataSource.setMaximumPoolSize(hikariConfigProperties.getMaximumPoolSize());
-                hikariDataSource.setMinimumIdle(hikariConfigProperties.getMinimumIdle());
-                hikariDataSource.setIdleTimeout(hikariConfigProperties.getIdleTimeout());
-                hikariDataSource.setMaxLifetime(hikariConfigProperties.getMaxLifetime());
-                hikariDataSource.setLeakDetectionThreshold(hikariConfigProperties.getLeakDetectionThreshold());
-                hikariDataSource.setConnectionTestQuery(hikariConfigProperties.getConnectionTestQuery());
-
-                // Validate the reconfigured pool
-                validate(hikariDataSource);
-
-                return "Database pool has been reset and validated successfully.";
-            } else {
-                throw new IllegalStateException("Datasource is not HikariCP. Pool cannot be reset.");
-            }
+            HikariConfigMXBean hikariConfigMXBean = hikariDataSource.getHikariConfigMXBean();
+            hikariConfigMXBean.setConnectionTestQuery(newQuery);
+            return "Connection test query updated successfully.";
         } catch (Exception ex) {
             ex.printStackTrace();
-            return "Failed to reset and validate the database pool: " + ex.getMessage();
+            return "Failed to update connection test query: " + ex.getMessage();
         }
     }
 
     /**
-     * Validates the Hikari connection pool to ensure it is operational.
-     *
-     * @param hikariDataSource The HikariDataSource to validate.
-     * @throws Exception If validation fails.
+     * Validates the Hikari connection pool using HikariPoolMXBean and a test connection.
      */
-    private void validate(HikariDataSource hikariDataSource) throws Exception {
-        // Check connection validity
-        try (Connection connection = hikariDataSource.getConnection()) {
-            if (connection == null || connection.isClosed() || !connection.isValid(2)) {
-                throw new Exception("HikariCP pool validation failed: connection is not valid.");
+    public String validatePool() {
+        try {
+            // Validate pool state using HikariPoolMXBean
+            HikariPoolMXBean poolMXBean = hikariDataSource.getHikariPoolMXBean();
+            if (poolMXBean == null) {
+                throw new Exception("HikariPoolMXBean is null.");
             }
+
+            if (poolMXBean.getTotalConnections() == 0) {
+                throw new Exception("No connections in the pool.");
+            }
+
+            System.out.println("HikariCP Pool State:");
+            System.out.println("Active connections: " + poolMXBean.getActiveConnections());
+            System.out.println("Idle connections: " + poolMXBean.getIdleConnections());
+            System.out.println("Total connections: " + poolMXBean.getTotalConnections());
+
+            // Validate an individual connection
+            try (Connection connection = hikariDataSource.getConnection()) {
+                if (connection == null || connection.isClosed() || !connection.isValid(2)) {
+                    throw new Exception("Connection validation failed.");
+                }
+            }
+
+            return "HikariCP pool validation successful.";
         } catch (Exception ex) {
-            throw new Exception("HikariCP pool validation failed during connection test: " + ex.getMessage(), ex);
+            ex.printStackTrace();
+            return "HikariCP pool validation failed: " + ex.getMessage();
         }
+    }
 
-        // Check pool state via HikariPoolMXBean
-        HikariPoolMXBean poolMXBean = hikariDataSource.getHikariPoolMXBean();
-        if (poolMXBean == null) {
-            throw new Exception("HikariCP pool validation failed: HikariPoolMXBean is null.");
+    /**
+     * Dynamically updates the maximum pool size at runtime.
+     */
+    public String updateMaximumPoolSize(int newMaxPoolSize) {
+        try {
+            HikariConfigMXBean hikariConfigMXBean = hikariDataSource.getHikariConfigMXBean();
+            hikariConfigMXBean.setMaximumPoolSize(newMaxPoolSize);
+            return "Maximum pool size updated successfully.";
+        } catch (Exception ex) {
+            ex.printStackTrace();
+            return "Failed to update maximum pool size: " + ex.getMessage();
         }
-        if (poolMXBean.getTotalConnections() == 0) {
-            throw new Exception("HikariCP pool validation failed: no total connections in the pool.");
-        }
-
-        System.out.println("HikariCP pool validation successful. Active connections: " + poolMXBean.getActiveConnections()
-                + ", Idle connections: " + poolMXBean.getIdleConnections());
     }
 }
+
+2. Updated DatabaseAdminController Class
+
+This controller exposes REST endpoints to manage and validate the HikariCP pool dynamically.
+
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
+
+@RestController
+public class DatabaseAdminController {
+
+    @Autowired
+    private UpDbPool upDbPool;
+
+    /**
+     * Endpoint to update the connection test query at runtime.
+     */
+    @PutMapping("/admin/db/update-test-query")
+    public String updateConnectionTestQuery(@RequestParam String query) {
+        return upDbPool.updateConnectionTestQuery(query);
+    }
+
+    /**
+     * Endpoint to validate the HikariCP pool.
+     */
+    @GetMapping("/admin/db/validate")
+    public String validatePool() {
+        return upDbPool.validatePool();
+    }
+
+    /**
+     * Endpoint to update the maximum pool size at runtime.
+     */
+    @PutMapping("/admin/db/update-max-pool-size")
+    public String updateMaxPoolSize(@RequestParam int maxPoolSize) {
+        return upDbPool.updateMaximumPoolSize(maxPoolSize);
+    }
+}
+
+3. Configuration in application-dev.yml
+
+Ensure the HikariCP properties are properly configured in your application-dev.yml file.
+
+spring:
+  datasource:
+    url: jdbc:postgresql://at40450-neu-pg-01-flex-prep...
+    username: svc_at40450_pgfx_ui
+    password: your_password
+    hikari:
+      maximum-pool-size: 100
+      minimum-idle: 10
+      idle-timeout: 150000
+      max-lifetime: 150000
+      leak-detection-threshold: 180000
+      connection-test-query: SELECT 1
+
+Key Points of the Implementation
+
+1. Updating Pool Configuration at Runtime
+
+	•	Using HikariConfigMXBean:
+	•	Dynamically update configurable properties like:
+	•	connectionTestQuery
+	•	maximumPoolSize
+	•	minimumIdle
+	•	Example:
+
+HikariConfigMXBean hikariConfigMXBean = hikariDataSource.getHikariConfigMXBean();
+hikariConfigMXBean.setMaximumPoolSize(50);
+
+
+
+2. Validating the Pool
+
+	•	Using HikariPoolMXBean:
+	•	Retrieve the state of the pool, including:
+	•	Total connections.
+	•	Active connections.
+	•	Idle connections.
+	•	Example:
+
+HikariPoolMXBean poolMXBean = hikariDataSource.getHikariPoolMXBean();
+System.out.println("Active connections: " + poolMXBean.getActiveConnections());
+
+
+	•	Using Test Connections:
+	•	Validate individual connections by acquiring a connection from the pool and checking its validity.
+	•	Example:
+
+try (Connection connection = hikariDataSource.getConnection()) {
+    if (!connection.isValid(2)) {
+        throw new Exception("Connection validation failed.");
+    }
+}
+
+Example REST API Workflow
+
+1. Validate the Pool
+
+	•	Request:
+
+GET /admin/db/validate
+
+
+	•	Response:
+
+{
+  "message": "HikariCP pool validation successful."
+}
+
+
+
+2. Update the Connection Test Query
+
+	•	Request:
+
+PUT /admin/db/update-test-query?query=SELECT 1
+
+
+	•	Response:
+
+{
+  "message": "Connection test query updated successfully."
+}
+
+
+
+3. Update the Maximum Pool Size
+
+	•	Request:
+
+PUT /admin/db/update-max-pool-size?maxPoolSize=50
+
+
+	•	Response:
+
+{
+  "message": "Maximum pool size updated successfully."
+}
+
+When to Use This Implementation
+
+	1.	Dynamic Configuration Changes:
+	•	To adjust pool properties like connectionTestQuery or maximumPoolSize at runtime.
+	2.	Monitoring Pool State:
+	•	Use the validatePool() method to check the health and state of the pool (e.g., active and idle connections).
+	3.	Avoiding Pool Recreation:
+	•	HikariConfigMXBean allows you to make runtime changes without shutting down or recreating the pool.
+
+Benefits of Using Both Beans
+
+Bean	Purpose
+HikariConfigMXBean	Modify configurable properties at runtime (e.g., connectionTestQuery, maximumPoolSize).
+HikariPoolMXBean	Monitor runtime state (e.g., active connections, idle connections) for validation and debugging.
+
+Let me know if you need further clarification or enhancements!
