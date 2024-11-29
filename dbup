@@ -1,203 +1,78 @@
-If your configuration file is named application-dev.yml, and you’re running the application with the dev profile, Spring will automatically load the properties from this file when the active profile is set to dev.
+import com.zaxxer.hikari.HikariDataSource;
+import com.zaxxer.hikari.pool.HikariPoolMXBean;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Component;
 
-Here’s how you ensure it works seamlessly with the dev profile:
+import javax.sql.DataSource;
+import java.sql.Connection;
 
-1. Confirm the Active Profile
+@Component
+public class UpDbPool {
 
-Make sure the dev profile is set as the active profile. You can do this in one of the following ways:
+    @Autowired
+    private DataSource dataSource; // HikariCP DataSource
 
-a. In application.yml:
+    @Autowired
+    private HikariConfigProperties hikariConfigProperties; // Injected Hikari properties
 
-If you’re using application.yml as the default configuration, specify the active profile:
+    /**
+     * Resets the Hikari connection pool using values from HikariConfigProperties.
+     */
+    public String resetConnectionPool() {
+        try {
+            if (dataSource instanceof HikariDataSource) {
+                HikariDataSource hikariDataSource = (HikariDataSource) dataSource;
 
-spring:
-  profiles:
-    active: dev
+                // Close the existing pool
+                hikariDataSource.close();
 
-b. Via Environment Variables:
+                // Reinitialize the pool using HikariConfigProperties
+                hikariDataSource.setMaximumPoolSize(hikariConfigProperties.getMaximumPoolSize());
+                hikariDataSource.setMinimumIdle(hikariConfigProperties.getMinimumIdle());
+                hikariDataSource.setIdleTimeout(hikariConfigProperties.getIdleTimeout());
+                hikariDataSource.setMaxLifetime(hikariConfigProperties.getMaxLifetime());
+                hikariDataSource.setLeakDetectionThreshold(hikariConfigProperties.getLeakDetectionThreshold());
+                hikariDataSource.setConnectionTestQuery(hikariConfigProperties.getConnectionTestQuery());
 
-Set the SPRING_PROFILES_ACTIVE environment variable to dev:
+                // Validate the reconfigured pool
+                validate(hikariDataSource);
 
-export SPRING_PROFILES_ACTIVE=dev
+                return "Database pool has been reset and validated successfully.";
+            } else {
+                throw new IllegalStateException("Datasource is not HikariCP. Pool cannot be reset.");
+            }
+        } catch (Exception ex) {
+            ex.printStackTrace();
+            return "Failed to reset and validate the database pool: " + ex.getMessage();
+        }
+    }
 
-c. Pass as a JVM Argument:
+    /**
+     * Validates the Hikari connection pool to ensure it is operational.
+     *
+     * @param hikariDataSource The HikariDataSource to validate.
+     * @throws Exception If validation fails.
+     */
+    private void validate(HikariDataSource hikariDataSource) throws Exception {
+        // Check connection validity
+        try (Connection connection = hikariDataSource.getConnection()) {
+            if (connection == null || connection.isClosed() || !connection.isValid(2)) {
+                throw new Exception("HikariCP pool validation failed: connection is not valid.");
+            }
+        } catch (Exception ex) {
+            throw new Exception("HikariCP pool validation failed during connection test: " + ex.getMessage(), ex);
+        }
 
-When starting the application, pass the profile as a command-line argument:
+        // Check pool state via HikariPoolMXBean
+        HikariPoolMXBean poolMXBean = hikariDataSource.getHikariPoolMXBean();
+        if (poolMXBean == null) {
+            throw new Exception("HikariCP pool validation failed: HikariPoolMXBean is null.");
+        }
+        if (poolMXBean.getTotalConnections() == 0) {
+            throw new Exception("HikariCP pool validation failed: no total connections in the pool.");
+        }
 
-java -Dspring.profiles.active=dev -jar your-app.jar
-
-2. Define Your Hikari Configuration in application-dev.yml
-
-Here’s an example application-dev.yml tailored for the dev environment:
-
-spring:
-  datasource:
-    url: jdbc:postgresql://at40450-neu-pg-01-flex-prep...
-    username: svc_at40450_pgfx_ui
-    password: your_password
-    hikari:
-      maximum-pool-size: 100
-      minimum-idle: 10
-      idle-timeout: 150000
-      max-lifetime: 150000
-      leak-detection-threshold: 180000
-      connection-test-query: SELECT 1
-
-Make sure all the properties are properly indented (YAML is indentation-sensitive, as noted earlier).
-
-3. Modify resetConnectionPool() to Use application-dev.yml
-
-In the resetConnectionPool() method, dynamically load the configuration from the active profile (in this case, application-dev.yml) using either:
-
-Option 1: Use Environment
-
-This will ensure the values for HikariDataSource are sourced correctly from application-dev.yml.
-
-@Autowired
-private Environment environment;
-
-private void resetConnectionPool() throws Exception {
-    if (dataSource instanceof HikariDataSource) {
-        HikariDataSource hikariDataSource = (HikariDataSource) dataSource;
-
-        // Close the existing pool
-        hikariDataSource.close();
-
-        // Load configuration from application-dev.yml dynamically
-        hikariDataSource.setJdbcUrl(environment.getProperty("spring.datasource.url"));
-        hikariDataSource.setUsername(environment.getProperty("spring.datasource.username"));
-        hikariDataSource.setPassword(environment.getProperty("spring.datasource.password"));
-        hikariDataSource.setMaximumPoolSize(Integer.parseInt(environment.getProperty("spring.datasource.hikari.maximum-pool-size")));
-        hikariDataSource.setMinimumIdle(Integer.parseInt(environment.getProperty("spring.datasource.hikari.minimum-idle")));
-        hikariDataSource.setIdleTimeout(Long.parseLong(environment.getProperty("spring.datasource.hikari.idle-timeout")));
-        hikariDataSource.setMaxLifetime(Long.parseLong(environment.getProperty("spring.datasource.hikari.max-lifetime")));
-        hikariDataSource.setLeakDetectionThreshold(Long.parseLong(environment.getProperty("spring.datasource.hikari.leak-detection-threshold")));
-        hikariDataSource.setConnectionTestQuery(environment.getProperty("spring.datasource.hikari.connection-test-query"));
-
-        // Validate the new configuration
-        hikariDataSource.validate();
-    } else {
-        throw new IllegalStateException("Datasource is not HikariCP. Pool cannot be reset.");
+        System.out.println("HikariCP pool validation successful. Active connections: " + poolMXBean.getActiveConnections()
+                + ", Idle connections: " + poolMXBean.getIdleConnections());
     }
 }
-
-Option 2: Use @ConfigurationProperties
-
-This is a cleaner approach if you want to avoid manually fetching each property.
-	1.	Create a Configuration Class for Hikari Settings:
-
-import org.springframework.boot.context.properties.ConfigurationProperties;
-import org.springframework.context.annotation.Configuration;
-
-@Configuration
-@ConfigurationProperties(prefix = "spring.datasource.hikari")
-public class HikariConfigProperties {
-
-    private int maximumPoolSize;
-    private int minimumIdle;
-    private long idleTimeout;
-    private long maxLifetime;
-    private long leakDetectionThreshold;
-    private String connectionTestQuery;
-
-    // Getters and Setters
-    public int getMaximumPoolSize() {
-        return maximumPoolSize;
-    }
-
-    public void setMaximumPoolSize(int maximumPoolSize) {
-        this.maximumPoolSize = maximumPoolSize;
-    }
-
-    public int getMinimumIdle() {
-        return minimumIdle;
-    }
-
-    public void setMinimumIdle(int minimumIdle) {
-        this.minimumIdle = minimumIdle;
-    }
-
-    public long getIdleTimeout() {
-        return idleTimeout;
-    }
-
-    public void setIdleTimeout(long idleTimeout) {
-        this.idleTimeout = idleTimeout;
-    }
-
-    public long getMaxLifetime() {
-        return maxLifetime;
-    }
-
-    public void setMaxLifetime(long maxLifetime) {
-        this.maxLifetime = maxLifetime;
-    }
-
-    public long getLeakDetectionThreshold() {
-        return leakDetectionThreshold;
-    }
-
-    public void setLeakDetectionThreshold(long leakDetectionThreshold) {
-        this.leakDetectionThreshold = leakDetectionThreshold;
-    }
-
-    public String getConnectionTestQuery() {
-        return connectionTestQuery;
-    }
-
-    public void setConnectionTestQuery(String connectionTestQuery) {
-        this.connectionTestQuery = connectionTestQuery;
-    }
-}
-
-	2.	Inject HikariConfigProperties into the Controller:
-
-@Autowired
-private HikariConfigProperties hikariConfigProperties;
-
-private void resetConnectionPool() throws Exception {
-    if (dataSource instanceof HikariDataSource) {
-        HikariDataSource hikariDataSource = (HikariDataSource) dataSource;
-
-        // Close the existing pool
-        hikariDataSource.close();
-
-        // Reinitialize the pool using HikariConfigProperties
-        hikariDataSource.setMaximumPoolSize(hikariConfigProperties.getMaximumPoolSize());
-        hikariDataSource.setMinimumIdle(hikariConfigProperties.getMinimumIdle());
-        hikariDataSource.setIdleTimeout(hikariConfigProperties.getIdleTimeout());
-        hikariDataSource.setMaxLifetime(hikariConfigProperties.getMaxLifetime());
-        hikariDataSource.setLeakDetectionThreshold(hikariConfigProperties.getLeakDetectionThreshold());
-        hikariDataSource.setConnectionTestQuery(hikariConfigProperties.getConnectionTestQuery());
-
-        // Validate the new configuration
-        hikariDataSource.validate();
-    } else {
-        throw new IllegalStateException("Datasource is not HikariCP. Pool cannot be reset.");
-    }
-}
-
-4. Testing with the dev Profile
-
-Step 1: Activate the dev Profile
-
-	•	Ensure application-dev.yml is picked up by setting the active profile to dev (via application.yml, environment variables, or JVM arguments).
-
-Step 2: Test the Endpoint
-
-	•	Misconfigure the database pool using a separate endpoint or manually simulate a failure.
-	•	Call the /admin/db/up endpoint to reset the pool.
-	•	Confirm that the values sourced from application-dev.yml are applied to reinitialize the pool.
-
-Step 3: Verify Recovery
-
-	•	Test database-dependent endpoints to ensure the pool is functioning properly after the reset.
-
-Summary
-
-	•	Ensure application-dev.yml contains the correct HikariCP properties.
-	•	Use Spring’s Environment or @ConfigurationProperties to source the values dynamically.
-	•	Activate the dev profile to load application-dev.yml.
-	•	Use /admin/db/up to reset the pool dynamically without hardcoding configuration values.
-
-Let me know if you need further assistance!
