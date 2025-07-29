@@ -1,0 +1,230 @@
+# Simple MSAL Authentication Code
+
+Here's a minimal MSAL authentication implementation for your service-to-service authentication needs:
+
+## **Simple Config (config.py)**
+
+```python
+from pydantic_settings import BaseSettings
+
+class Settings(BaseSettings):
+    # MSAL Settings
+    msal_client_id: str = "your-client-id"
+    msal_client_secret: str = "your-client-secret"
+    msal_tenant_id: str = "your-tenant-id"
+    msal_scopes: list[str] = ["https://graph.microsoft.com/.default"]
+    
+    # LiFE UI
+    life_ui_base_url: str = "https://your-life-ui-api.com"
+    
+    @property
+    def msal_authority(self) -> str:
+        return f"https://login.microsoftonline.com/{self.msal_tenant_id}"
+    
+    class Config:
+        env_file = ".env"
+
+settings = Settings()
+```
+
+## **Simple MSAL Auth (msal_auth.py)**
+
+```python
+import msal
+import logging
+from typing import Optional, Dict, List
+
+from config import settings
+
+logger = logging.getLogger(__name__)
+
+class SimpleMSALAuth:
+    def __init__(self):
+        self.app = msal.ConfidentialClientApplication(
+            client_id=settings.msal_client_id,
+            client_credential=settings.msal_client_secret,
+            authority=settings.msal_authority
+        )
+        self.token_cache = {}
+    
+    async def get_token(self, scopes: Optional[List[str]] = None) -> Optional[str]:
+        """Get access token using client credentials flow"""
+        scopes = scopes or settings.msal_scopes
+        
+        try:
+            # Try client credentials flow
+            result = self.app.acquire_token_for_client(scopes=scopes)
+            
+            if "access_token" in result:
+                token = result["access_token"]
+                logger.info("✅ MSAL token acquired successfully")
+                return token
+            else:
+                error = result.get('error_description', 'Unknown error')
+                logger.error(f"❌ MSAL token failed: {error}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"❌ MSAL exception: {e}")
+            return None
+    
+    async def get_auth_headers(self, scopes: Optional[List[str]] = None) -> Dict[str, str]:
+        """Get headers with Bearer token"""
+        token = await self.get_token(scopes)
+        
+        headers = {
+            'Content-Type': 'application/json',
+            'User-Agent': 'FastAPI-MSAL-Client/1.0'
+        }
+        
+        if token:
+            headers['Authorization'] = f'Bearer {token}'
+        
+        return headers
+
+# Global instance
+msal_auth = SimpleMSALAuth()
+```
+
+## **Usage Example (test_msal.py)**
+
+```python
+import asyncio
+import aiohttp
+from msal_auth import msal_auth
+from config import settings
+
+async def test_msal_auth():
+    """Test MSAL authentication"""
+    print("🔐 Testing MSAL Authentication...")
+    
+    # Get token
+    token = await msal_auth.get_token()
+    if token:
+        print(f"✅ Token acquired: {token[:50]}...")
+    else:
+        print("❌ Failed to get token")
+        return
+    
+    # Test authenticated request
+    headers = await msal_auth.get_auth_headers()
+    
+    async with aiohttp.ClientSession() as session:
+        try:
+            # Example: Call Microsoft Graph API
+            async with session.get(
+                "https://graph.microsoft.com/v1.0/me", 
+                headers=headers
+            ) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    print(f"✅ API call successful: {data}")
+                else:
+                    print(f"❌ API call failed: {response.status}")
+                    
+        except Exception as e:
+            print(f"❌ Request failed: {e}")
+
+if __name__ == "__main__":
+    asyncio.run(test_msal_auth())
+```
+
+## **Integration with LiFE UI Service**
+
+```python
+import aiohttp
+from typing import Dict, Any
+from msal_auth import msal_auth
+from config import settings
+
+class SimpleLiFEUIService:
+    async def post_data(self, endpoint: str, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Simple POST to LiFE UI with MSAL auth"""
+        url = f"{settings.life_ui_base_url.rstrip('/')}/{endpoint.lstrip('/')}"
+        headers = await msal_auth.get_auth_headers()
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=data, headers=headers) as response:
+                if response.status >= 400:
+                    raise Exception(f"API Error {response.status}: {await response.text()}")
+                return await response.json()
+    
+    async def get_data(self, endpoint: str) -> Dict[str, Any]:
+        """Simple GET from LiFE UI with MSAL auth"""
+        url = f"{settings.life_ui_base_url.rstrip('/')}/{endpoint.lstrip('/')}"
+        headers = await msal_auth.get_auth_headers()
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=headers) as response:
+                if response.status >= 400:
+                    raise Exception(f"API Error {response.status}: {await response.text()}")
+                return await response.json()
+
+# Usage
+life_ui = SimpleLiFEUIService()
+```
+
+## **Environment Variables (.env)**
+
+```bash
+# MSAL Configuration
+MSAL_CLIENT_ID=12345678-1234-1234-1234-123456789012
+MSAL_CLIENT_SECRET=your-client-secret-value
+MSAL_TENANT_ID=your-tenant-id-or-domain.onmicrosoft.com
+MSAL_SCOPES=["https://your-api-scope/.default"]
+
+# LiFE UI
+LIFE_UI_BASE_URL=https://your-life-ui-api.com
+```
+
+## **Quick Usage in FastAPI**
+
+```python
+from fastapi import FastAPI
+from msal_auth import msal_auth
+
+app = FastAPI()
+
+@app.post("/test-msal")
+async def test_msal_endpoint():
+    """Test endpoint to verify MSAL works"""
+    token = await msal_auth.get_token()
+    
+    if token:
+        return {
+            "status": "success", 
+            "message": "MSAL authentication working",
+            "token_preview": token[:50] + "..."
+        }
+    else:
+        return {
+            "status": "error",
+            "message": "MSAL authentication failed"
+        }
+
+@app.post("/call-life-ui")
+async def call_life_ui(data: dict):
+    """Make authenticated call to LiFE UI"""
+    headers = await msal_auth.get_auth_headers()
+    
+    # Your API call logic here
+    return {"message": "Would call LiFE UI with authenticated headers", "headers": headers}
+```
+
+## **Key Points**
+
+1. **Minimal Setup**: Only requires client ID, secret, and tenant ID
+2. **Client Credentials Flow**: Perfect for service-to-service authentication
+3. **No Token Cache**: Keeps it simple (tokens are requested fresh each time)
+4. **Error Handling**: Basic error logging and handling
+5. **Ready to Use**: Can immediately make authenticated API calls
+
+## **To Make It Work**
+
+1. **Register Azure App**: Create app registration in Azure Portal
+2. **Get Credentials**: Copy Client ID, Secret, and Tenant ID
+3. **Set Permissions**: Grant appropriate API permissions in Azure
+4. **Update .env**: Add your actual credentials
+5. **Test**: Run the test script to verify authentication works
+
+This is a production-ready but simple MSAL implementation that handles the core authentication flow without unnecessary complexity.
