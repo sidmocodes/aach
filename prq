@@ -1,0 +1,180 @@
+Thank you! You’ve shared two images:
+
+- **Image 1**: Shows the LiFE UI API endpoint (URL) being hit:
+  ```
+  https://neo-dev1.ubsdev.net/api/parameter-service/adjustment/%7BadjustmentId%7D
+  ```
+
+- **Image 2**: Shows the actual POST request payload (form-data + possible file) observed in the browser Network/DevTools.
+
+Let’s summarize and map this for your FastAPI + SSL (client certificate) implementation.
+
+## 1. **POST URL & Path Parameter**
+
+Notice that the URL contains a path variable:
+```
+.../adjustment/{adjustmentId}
+```
+Where `{adjustmentId}` is a placeholder (URL-encoded in the screenshot).
+
+## 2. **Form Fields (POST Body)**
+Image 2 shows the parameters as form-data:
+- `valueId`
+- `adjustmentType`
+- `adjustmentName`
+- `adjustmentDescription`
+- `itemClassification`
+- `vectorScenario`
+- `reportingFrequency`
+- `updateFrequency`
+- `dailyConsolidation`
+- `eucID`
+- `adjustmentOwner`
+- `effectiveFrom`
+- `effectiveTo`
+- `postingStatusCode`
+- `adjustmentPreparer`
+- `actionBy`
+- `adjustmentData` (binary)
+- `evidenceFiles` (binary)
+
+Additionally, there is a query string:  
+- `presentPostingStatusCode=1`  
+
+## 3. **What You Need in FastAPI + Python**
+
+Based on your SSL-only requirements and the above data, here’s **how to POST to this LiFE UI endpoint** with Python using `aiohttp`:
+
+### **Step A: Build the Multipart Form-Data**
+All fields except `adjustmentData` and `evidenceFiles` are typical form fields (strings or numbers).
+`adjustmentData` and `evidenceFiles` are files/binary.
+
+### **Step B: Pass Path Variable**
+The endpoint needs `adjustmentId` in the path.
+
+### **Step C: Send Query Param**
+`presentPostingStatusCode=1` should be in the URL query string.
+
+### **Step D: Use SSL Client Certificate**
+Your aiohttp/TCPConnector uses your SSL context with client certificate loaded, as implemented earlier.
+
+## **Python Example to Match What You’ve Shown**
+
+```python
+import aiohttp
+from typing import Dict, Any
+from pathlib import Path
+from ssl_auth import ssl_auth  # your SSL context manager
+from config import settings
+
+async def post_to_life_ui_adjustment(
+    adjustment_id: str,
+    data_fields: Dict[str, Any],
+    adjustment_data_path: Path = None,
+    evidence_file_paths: list[Path] = None,
+    present_posting_status_code: str = "1"
+):
+    url = (
+        f"{settings.life_ui_base_url.rstrip('/')}/api/parameter-service/adjustment/{adjustment_id}"
+        f"?presentPostingStatusCode={present_posting_status_code}"
+    )
+    # SSL context
+    ssl_context = ssl_auth.get_ssl_context_for_client()
+    headers = ssl_auth.get_client_auth_headers()
+
+    # Remove Content-Type for multipart
+    if 'Content-Type' in headers:
+        del headers['Content-Type']
+
+    # Prepare multipart form-data
+    form = aiohttp.FormData()
+    for k, v in data_fields.items():
+        # Do NOT add files here!
+        if k not in {"adjustmentData", "evidenceFiles"}:
+            form.add_field(k, str(v))
+
+    # Add the primary file (adjustmentData)
+    if adjustment_data_path and Path(adjustment_data_path).exists():
+        with open(adjustment_data_path, "rb") as f:
+            form.add_field(
+                "adjustmentData",
+                f.read(),
+                filename=Path(adjustment_data_path).name,
+                content_type="application/octet-stream"
+            )
+
+    # Add any evidence files (repeatable field)
+    if evidence_file_paths:
+        for file_path in evidence_file_paths:
+            if Path(file_path).exists():
+                with open(file_path, "rb") as f:
+                    form.add_field(
+                        "evidenceFiles",
+                        f.read(),
+                        filename=Path(file_path).name,
+                        content_type="application/octet-stream"
+                    )
+
+    # Do the request
+    async with aiohttp.ClientSession(
+        connector=aiohttp.TCPConnector(ssl=ssl_context),
+        timeout=aiohttp.ClientTimeout(total=settings.life_ui_timeout)
+    ) as session:
+        async with session.post(url, data=form, headers=headers) as resp:
+            if resp.status >= 400:
+                raise Exception(f"Error {resp.status}: {await resp.text()}")
+            try:
+                return await resp.json()
+            except:
+                return await resp.text()
+```
+
+## **How to Use This Function**
+
+```python
+import asyncio
+
+# All non-binary fields
+fields = {
+    "valueId": 950866,
+    "adjustmentType": "Topside",
+    "adjustmentName": "Edited",
+    "adjustmentDescription": "...",
+    "itemClassification": "Incorrect L&F transformation logic",
+    "vectorScenario": "LST_SMW_LST_CMB",
+    "reportingFrequency": "Daily, Monthly",
+    "updateFrequency": "Daily",
+    "dailyConsolidation": 0,
+    "eucID": "",
+    "adjustmentOwner": "",
+    "effectiveFrom": "2023-10-19",
+    "effectiveTo": "",
+    "postingStatusCode": 1,
+    "adjustmentPreparer": "Siddharth Mohanty",
+    "actionBy": "Siddharth Mohanty",
+    # Do not put file fields here!
+}
+
+async def run():
+    result = await post_to_life_ui_adjustment(
+        adjustment_id="950866",  # Or whatever your actual ID is
+        data_fields=fields,
+        adjustment_data_path=Path("/path/to/adjustmentData.bin"),
+        evidence_file_paths=[Path("/path/to/evidence1.pdf"), Path("/path/to/evidence2.pdf")]
+    )
+    print(result)
+
+# Run with: asyncio.run(run())
+```
+
+## **TL;DR Matching Your Java/Network Traffic:**
+- All regular fields go in the form data as strings.
+- `adjustmentData` and each `evidenceFiles` go as files (multipart form, just like your Java code).
+- Use client-cert SSL: context from a keystore, as in previous answers.
+- Path variable and query parameter are handled in the URL.
+
+**This Python code will send the exact multipart POST as seen in your browser and should work with your LiFE UI SSL endpoint.**  
+If you need a FastAPI endpoint to receive similar requests, let me know!
+
+[1] https://ppl-ai-file-upload.s3.amazonaws.com/web/direct-files/attachments/images/49220621/9b490a10-8fd9-43ce-b323-226c5f5a17e9/image.jpeg?AWSAccessKeyId=ASIA2F3EMEYEWV723WV2&Signature=8b0gDO3S7tRtLgtAjN8mxgn2TZQ%3D&x-amz-security-token=IQoJb3JpZ2luX2VjEHkaCXVzLWVhc3QtMSJHMEUCIAjbVAfyTvGqHb%2FfrcfAFTwlLIJ%2B0CSVw5%2FTTXrn9JbTAiEA%2B5%2FoW2fsPBM9fztnW4WEb1UVlNyhq1ZycRWQyBEnlo4q%2BgQIov%2F%2F%2F%2F%2F%2F%2F%2F%2F%2FARABGgw2OTk3NTMzMDk3MDUiDKxGHC3k0frO6EkqmyrOBBZTNLftDhyy2R6mqWE6c%2Fh5z%2FtLSdBR85LyuOp1rBKso7ARklAkijC7DMGVv2oEotjAkgr8UlLfGu4RuLufTOijsCTgrJoSd6KuRfYZbXIsjEKLprUxZCKZHBSXWBtIgfwGcZ2gaEVnxDSTH68%2Fqfl%2BWqLXGwY0q5BV%2BdKOtEQSFNmZPpK5rmYO8DS0JTMVz5cNuYx0wwxRLafSSazNn%2F7hgEVMZhCcdC65qKWkVxN1MjreK6bE4qYHsioJzeo02n9JTdGTwHY9aqTX6GUFrnwIwmBN9Euz9yp%2FWiTx9KhNdGCcdLA6twmIKb%2BywO6%2FCHe9vM7MNp7QcHWBCSWCD2bssDA1yRL7%2B6kvNoPXSfTFURP3nd84iQmAONlkZtd1wJY0Cm6YLaRye5St3aeEEyLG406HaDfwLFWKVhi0uYp4dcAqwqpdY37l9OdIYn04SrkO1NNl49xpC1NYmE6dH%2F%2FETUYp4nKxx1ptyfgxKuKuCnrNFaSyGMLoK1Ub9j35jPsOw1m5Z46pfHywCMf%2F9f465N2xgTwTmX2VpbgBCbazFpbB8hz3v2RRKJoG%2F1gVqe1ct%2Bigs%2Bcw1Tmeho0170SAp3lUdKTuZB3yw9gzZ9wdA3NVTWgLqf7V843UqKIe8lcYx5Ob8N4HQnc29arbCOy90n62UP2pXqYrAm9J%2FpIRHAHLO3EHwWOEmrvKnGo5meKVYFXex%2FpyrJDc5GtJDbEgH%2BgmwHPndrWRKByPSMurPMEZR4b6qSwCgmYLFv0OB7kALQY5642H6MRWAlsxMLWWosQGOpoBHXCpWRgJy%2BCNNRjJ%2BR6LY3XrSgnQqqd2pt5t3MKzepVzBTenjaTCxWFKBfIsFa0gUlmE46Pd6wovRNx%2B60kpA%2FfLJ6crtQah%2FVy1LPFnMsaCkjeU6IPld6Pv76PYAicl3oBclif7E1ZErMjaHydUTTC1MANAXqbszazIr4g49P6ej%2FrwhkeBrXV%2B2b99Z%2BfmnRhGe6%2F74g2qvA%3D%3D&Expires=1753779988
+[2] https://ppl-ai-file-upload.s3.amazonaws.com/web/direct-files/attachments/images/49220621/2044284c-1e62-466c-8a80-4205ebebf327/image.jpeg?AWSAccessKeyId=ASIA2F3EMEYEWV723WV2&Signature=HW8osEuRQGtdZrcb91wGCLTI11A%3D&x-amz-security-token=IQoJb3JpZ2luX2VjEHkaCXVzLWVhc3QtMSJHMEUCIAjbVAfyTvGqHb%2FfrcfAFTwlLIJ%2B0CSVw5%2FTTXrn9JbTAiEA%2B5%2FoW2fsPBM9fztnW4WEb1UVlNyhq1ZycRWQyBEnlo4q%2BgQIov%2F%2F%2F%2F%2F%2F%2F%2F%2F%2FARABGgw2OTk3NTMzMDk3MDUiDKxGHC3k0frO6EkqmyrOBBZTNLftDhyy2R6mqWE6c%2Fh5z%2FtLSdBR85LyuOp1rBKso7ARklAkijC7DMGVv2oEotjAkgr8UlLfGu4RuLufTOijsCTgrJoSd6KuRfYZbXIsjEKLprUxZCKZHBSXWBtIgfwGcZ2gaEVnxDSTH68%2Fqfl%2BWqLXGwY0q5BV%2BdKOtEQSFNmZPpK5rmYO8DS0JTMVz5cNuYx0wwxRLafSSazNn%2F7hgEVMZhCcdC65qKWkVxN1MjreK6bE4qYHsioJzeo02n9JTdGTwHY9aqTX6GUFrnwIwmBN9Euz9yp%2FWiTx9KhNdGCcdLA6twmIKb%2BywO6%2FCHe9vM7MNp7QcHWBCSWCD2bssDA1yRL7%2B6kvNoPXSfTFURP3nd84iQmAONlkZtd1wJY0Cm6YLaRye5St3aeEEyLG406HaDfwLFWKVhi0uYp4dcAqwqpdY37l9OdIYn04SrkO1NNl49xpC1NYmE6dH%2F%2FETUYp4nKxx1ptyfgxKuKuCnrNFaSyGMLoK1Ub9j35jPsOw1m5Z46pfHywCMf%2F9f465N2xgTwTmX2VpbgBCbazFpbB8hz3v2RRKJoG%2F1gVqe1ct%2Bigs%2Bcw1Tmeho0170SAp3lUdKTuZB3yw9gzZ9wdA3NVTWgLqf7V843UqKIe8lcYx5Ob8N4HQnc29arbCOy90n62UP2pXqYrAm9J%2FpIRHAHLO3EHwWOEmrvKnGo5meKVYFXex%2FpyrJDc5GtJDbEgH%2BgmwHPndrWRKByPSMurPMEZR4b6qSwCgmYLFv0OB7kALQY5642H6MRWAlsxMLWWosQGOpoBHXCpWRgJy%2BCNNRjJ%2BR6LY3XrSgnQqqd2pt5t3MKzepVzBTenjaTCxWFKBfIsFa0gUlmE46Pd6wovRNx%2B60kpA%2FfLJ6crtQah%2FVy1LPFnMsaCkjeU6IPld6Pv76PYAicl3oBclif7E1ZErMjaHydUTTC1MANAXqbszazIr4g49P6ej%2FrwhkeBrXV%2B2b99Z%2BfmnRhGe6%2F74g2qvA%3D%3D&Expires=1753779988
