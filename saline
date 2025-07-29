@@ -1,0 +1,629 @@
+# SSL-Only Authentication Implementation Based on Java Pattern
+
+Based on the Java SSL implementation shown in your images, I can see the pattern uses keystore-based SSL certificate loading with custom SSL context creation. Here's a Python implementation that mirrors this approach while maintaining your FastAPI structure.
+
+## **Updated requirements.txt**
+
+```txt
+fastapi==0.104.1
+fastmcp==0.1.0
+uvicorn==0.24.0
+aiohttp==3.9.0
+papermill==2.4.0
+pydantic==2.5.0
+pydantic-settings==2.1.0
+cryptography==41.0.0
+python-multipart==0.0.6
+```
+
+## **config.py - SSL-Focused Configuration**
+
+```python
+from pydantic_settings import BaseSettings
+from typing import Optional
+from pathlib import Path
+
+class Settings(BaseSettings):
+    # App Settings
+    app_name: str = "SSL-Only MCP Server"
+    app_version: str = "1.0.0"
+    debug: bool = False
+    
+    # Server Settings
+    host: str = "0.0.0.0"
+    port: int = 8000
+    
+    # LiFE UI Settings
+    life_ui_base_url: str = "https://life-ui-api.example.com"
+    life_ui_timeout: int = 30
+    
+    # SSL Settings (matching Java keystore pattern)
+    ssl_keystore_path: Optional[Path] = None
+    ssl_keystore_password: Optional[str] = None
+    ssl_truststore_path: Optional[Path] = None
+    ssl_truststore_password: Optional[str] = None
+    ssl_cert_path: Optional[Path] = None
+    ssl_key_path: Optional[Path] = None
+    
+    # SSL Verification Settings
+    ssl_verify_hostname: bool = False  # NoopHostnameVerifier equivalent
+    ssl_verify_peer: bool = True
+    
+    class Config:
+        env_file = ".env"
+
+settings = Settings()
+```
+
+## **ssl_auth.py - Java-Pattern SSL Authentication**
+
+```python
+import ssl
+import tempfile
+import os
+from pathlib import Path
+from typing import Optional, Dict, Any, Tuple
+import logging
+from fastapi import HTTPException, Request, Depends
+from cryptography.hazmat.primitives.serialization import pkcs12
+from cryptography.hazmat.primitives import serialization
+from cryptography import x509
+from datetime import datetime
+import base64
+
+from config import settings
+
+logger = logging.getLogger(__name__)
+
+class SSLKeystoreManager:
+    """Manages SSL keystore operations similar to Java KeyStore"""
+    
+    def __init__(self):
+        self.keystore_path: Optional[Path] = None
+        self.keystore_password: Optional[str] = None
+        self.truststore_path: Optional[Path] = None
+        self.truststore_password: Optional[str] = None
+        self.private_key = None
+        self.certificate = None
+        self.cert_chain = None
+        
+    def read_keystore_path(self) -> Optional[Path]:
+        """Read keystore path from configuration (mirrors Java readPath())"""
+        return settings.ssl_keystore_path
+    
+    def read_keystore_password(self) -> Optional[str]:
+        """Read keystore password from configuration (mirrors Java readPassword())"""
+        return settings.ssl_keystore_password
+    
+    def load_keystore(self) -> bool:
+        """Load keystore similar to Java KeyStore.load()"""
+        try:
+            keystore_path = self.read_keystore_path()
+            keystore_password = self.read_keystore_password()
+            
+            if not keystore_path or not keystore_path.exists():
+                logger.warning("Keystore path not found")
+                return False
+            
+            with open(keystore_path, 'rb') as f:
+                keystore_data = f.read()
+            
+            password = keystore_password.encode() if keystore_password else None
+            self.private_key, self.certificate, self.cert_chain = pkcs12.load_key_and_certificates(
+                keystore_data, password
+            )
+            
+            logger.info("Keystore loaded successfully")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to load keystore: {e}")
+            return False
+
+class SSLSocketFactory:
+    """SSL Socket Factory similar to Java SSLSocketFactory"""
+    
+    def __init__(self):
+        self.keystore_manager = SSLKeystoreManager()
+        self.ssl_context: Optional[ssl.SSLContext] = None
+        self._initialize()
+    
+    def _initialize(self):
+        """Initialize SSL socket factory"""
+        if self.keystore_manager.load_keystore():
+            self.ssl_context = self.generate_ssl_context()
+    
+    def generate_ssl_context(self) -> Optional[ssl.SSLContext]:
+        """Generate SSL context similar to Java SSLContext.getInstance()"""
+        try:
+            if not self.keystore_manager.certificate or not self.keystore_manager.private_key:
+                logger.error("No certificate or private key available")
+                return None
+            
+            # Create SSL context
+            context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
+            
+            # Convert certificate and key to PEM format
+            cert_pem = self.keystore_manager.certificate.public_bytes(serialization.Encoding.PEM)
+            key_pem = self.keystore_manager.private_key.private_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PrivateFormat.PKCS8,
+                encryption_algorithm=serialization.NoEncryption()
+            )
+            
+            # Create temporary files for SSL context
+            with tempfile.NamedTemporaryFile(mode='wb', delete=False, suffix='.crt') as cert_file:
+                cert_file.write(cert_pem)
+                cert_path = cert_file.name
+            
+            with tempfile.NamedTemporaryFile(mode='wb', delete=False, suffix='.key') as key_file:
+                key_file.write(key_pem)
+                key_path = key_file.name
+            
+            try:
+                # Load certificate chain
+                context.load_cert_chain(cert_path, key_path)
+                
+                # Configure SSL settings (similar to Java SSLContext configuration)
+                context.check_hostname = settings.ssl_verify_hostname
+                context.verify_mode = ssl.CERT_REQUIRED if settings.ssl_verify_peer else ssl.CERT_NONE
+                
+                # Set minimum TLS version
+                context.minimum_version = ssl.TLSVersion.TLSv1_2
+                
+                logger.info("SSL context generated successfully")
+                return context
+                
+            finally:
+                # Clean up temporary files
+                os.unlink(cert_path)
+                os.unlink(key_path)
+                
+        except Exception as e:
+            logger.error(f"Failed to generate SSL context: {e}")
+            return None
+    
+    def get_ssl_context(self) -> Optional[ssl.SSLContext]:
+        """Get the generated SSL context"""
+        return self.ssl_context
+
+class SSLConnectionManager:
+    """SSL Connection Manager similar to Java connection managers"""
+    
+    def __init__(self):
+        self.socket_factory = SSLSocketFactory()
+        self.ssl_context = self.socket_factory.get_ssl_context()
+    
+    def create_secure_connection(self) -> Optional[ssl.SSLContext]:
+        """Create secure connection context"""
+        return self.ssl_context
+    
+    def verify_peer_certificate(self, cert_data: bytes) -> Dict[str, Any]:
+        """Verify peer certificate"""
+        try:
+            cert = x509.load_der_x509_certificate(cert_data)
+            
+            # Extract certificate information
+            subject = cert.subject.rfc4514_string()
+            issuer = cert.issuer.rfc4514_string()
+            serial_number = str(cert.serial_number)
+            
+            # Check validity
+            now = datetime.utcnow()
+            is_valid = cert.not_valid_before  Optional[ssl.SSLContext]:
+        """Get SSL context for outgoing client connections"""
+        return self.ssl_context
+    
+    def get_ssl_context_for_server(self) -> Optional[ssl.SSLContext]:
+        """Get SSL context for incoming server connections"""
+        if self.ssl_context:
+            # Create a copy for server use
+            server_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+            # Copy configuration from client context
+            server_context.verify_mode = ssl.CERT_OPTIONAL
+            server_context.check_hostname = False
+            return server_context
+        return None
+    
+    def authenticate_user_from_certificate(self, request: Request) -> Dict[str, Any]:
+        """Authenticate user from SSL client certificate"""
+        try:
+            # Extract certificate from request headers (set by reverse proxy)
+            client_cert_header = request.headers.get('X-SSL-Client-Cert')
+            client_cert_subject = request.headers.get('X-SSL-Client-Subject')
+            client_cert_verify = request.headers.get('X-SSL-Client-Verify')
+            
+            if not client_cert_header and not client_cert_subject:
+                raise HTTPException(
+                    status_code=401,
+                    detail="SSL client certificate required for authentication"
+                )
+            
+            if client_cert_verify and client_cert_verify.lower() != 'success':
+                raise HTTPException(
+                    status_code=401,
+                    detail="SSL client certificate verification failed"
+                )
+            
+            # Verify certificate if full cert is available
+            if client_cert_header:
+                try:
+                    # Decode certificate
+                    cert_data = base64.b64decode(client_cert_header)
+                    cert_info = self.connection_manager.verify_peer_certificate(cert_data)
+                    
+                    if not cert_info.get("valid"):
+                        raise HTTPException(status_code=401, detail="Invalid client certificate")
+                        
+                except Exception as e:
+                    logger.error(f"Certificate verification failed: {e}")
+                    raise HTTPException(status_code=401, detail="Certificate verification error")
+            else:
+                # Use information from reverse proxy headers
+                cert_info = {
+                    "valid": True,
+                    "subject": client_cert_subject,
+                    "common_name": self._extract_cn_from_subject(client_cert_subject)
+                }
+            
+            # Create authenticated user context
+            user_context = {
+                "authenticated": True,
+                "auth_method": "ssl_client_certificate",
+                "user_id": cert_info.get("common_name", "unknown"),
+                "certificate_info": cert_info,
+                "client_ip": request.client.host if request.client else "unknown",
+                "timestamp": datetime.utcnow().isoformat()
+            }
+            
+            logger.info(f"User authenticated via SSL certificate: {user_context['user_id']}")
+            return user_context
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"SSL authentication failed: {e}")
+            raise HTTPException(status_code=500, detail="SSL authentication error")
+    
+    def _extract_cn_from_subject(self, subject_dn: str) -> Optional[str]:
+        """Extract Common Name from subject DN"""
+        if not subject_dn:
+            return None
+        
+        for part in subject_dn.split(','):
+            part = part.strip()
+            if part.startswith('CN='):
+                return part[3:]
+        return None
+    
+    def get_client_auth_headers(self) -> Dict[str, str]:
+        """Get headers for SSL-authenticated API calls"""
+        return {
+            'Content-Type': 'application/json',
+            'User-Agent': f'{settings.app_name}/{settings.app_version}',
+            'X-Auth-Method': 'SSL-Certificate',
+            'X-SSL-Enabled': 'true'
+        }
+
+# Global SSL authentication instance
+ssl_auth = SSLAuthentication()
+
+# FastAPI Dependencies
+async def get_authenticated_user(request: Request) -> Dict[str, Any]:
+    """FastAPI dependency for SSL certificate authentication"""
+    return ssl_auth.authenticate_user_from_certificate(request)
+
+async def get_optional_user(request: Request) -> Optional[Dict[str, Any]]:
+    """FastAPI dependency for optional SSL certificate authentication"""
+    try:
+        return ssl_auth.authenticate_user_from_certificate(request)
+    except HTTPException:
+        return None
+```
+
+## **life_ui.py - SSL-Authenticated LiFE UI Service**
+
+```python
+from fastapi import FastAPI, File, Form, UploadFile, HTTPException, APIRouter
+from typing import Dict, Any, Optional, List
+import aiohttp
+import json
+import logging
+from pathlib import Path
+
+from config import settings
+from ssl_auth import ssl_auth
+
+logger = logging.getLogger(__name__)
+
+class SSLLiFEUIService:
+    """LiFE UI Service using SSL client certificate authentication"""
+    
+    def __init__(self):
+        self.base_url = settings.life_ui_base_url
+        self.timeout = settings.life_ui_timeout
+    
+    async def post_multipart_data(
+        self,
+        endpoint: str,
+        form_data: Dict[str, Any],
+        file_contents: List[tuple] = None,  # [(filename, content, content_type)]
+        use_ssl_auth: bool = True
+    ) -> Dict[str, Any]:
+        """Post multipart data to LiFE UI API with SSL authentication"""
+        url = f"{self.base_url.rstrip('/')}/{endpoint.lstrip('/')}"
+        
+        # Get SSL context and authentication headers
+        ssl_context = ssl_auth.get_ssl_context_for_client() if use_ssl_auth else None
+        headers = ssl_auth.get_client_auth_headers()
+        
+        # Remove Content-Type for multipart requests
+        if 'Content-Type' in headers:
+            del headers['Content-Type']
+        
+        # Build multipart form data
+        form = aiohttp.FormData()
+        
+        # Add form fields
+        for key, value in form_data.items():
+            if isinstance(value, (dict, list)):
+                form.add_field(key, json.dumps(value), content_type='application/json')
+            else:
+                form.add_field(key, str(value))
+        
+        # Add files if provided
+        if file_contents:
+            for filename, content, content_type in file_contents:
+                form.add_field('file', content, filename=filename, content_type=content_type)
+        
+        try:
+            connector = aiohttp.TCPConnector(ssl=ssl_context)
+            timeout = aiohttp.ClientTimeout(total=self.timeout)
+            
+            async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+                logger.info(f"SSL-authenticated POST to {url}")
+                
+                async with session.post(url, data=form, headers=headers) as response:
+                    if response.status >= 400:
+                        error_text = await response.text()
+                        logger.error(f"LiFE UI API error {response.status}: {error_text}")
+                        raise HTTPException(status_code=response.status, detail=error_text)
+                    
+                    try:
+                        result = await response.json()
+                    except:
+                        result = {"response_text": await response.text()}
+                    
+                    logger.info(f"LiFE UI API success: {response.status}")
+                    return result
+        
+        except aiohttp.ClientError as e:
+            logger.error(f"SSL client error: {e}")
+            raise HTTPException(status_code=500, detail=f"SSL connection error: {str(e)}")
+        except Exception as e:
+            logger.error(f"Unexpected error: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+    
+    async def get_data(self, endpoint: str, use_ssl_auth: bool = True) -> Dict[str, Any]:
+        """GET request to LiFE UI API with SSL authentication"""
+        url = f"{self.base_url.rstrip('/')}/{endpoint.lstrip('/')}"
+        
+        ssl_context = ssl_auth.get_ssl_context_for_client() if use_ssl_auth else None
+        headers = ssl_auth.get_client_auth_headers()
+        
+        try:
+            connector = aiohttp.TCPConnector(ssl=ssl_context)
+            timeout = aiohttp.ClientTimeout(total=self.timeout)
+            
+            async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+                logger.info(f"SSL-authenticated GET {url}")
+                
+                async with session.get(url, headers=headers) as response:
+                    if response.status >= 400:
+                        error_text = await response.text()
+                        logger.error(f"LiFE UI API error {response.status}: {error_text}")
+                        raise HTTPException(status_code=response.status, detail=error_text)
+                    
+                    try:
+                        result = await response.json()
+                    except:
+                        result = {"response_text": await response.text()}
+                    
+                    return result
+        
+        except Exception as e:
+            logger.error(f"SSL GET request failed: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+
+# Global service instance
+life_ui_service = SSLLiFEUIService()
+
+def create_life_ui_router():
+    """Create FastAPI router for LiFE UI endpoints with SSL authentication"""
+    router = APIRouter(prefix="/life-ui", tags=["LiFE UI"])
+    
+    @router.post("/upload")
+    async def upload_multipart_to_life_ui(
+        endpoint: str = Form(..., description="LiFE UI API endpoint"),
+        data: str = Form(..., description="JSON data to send"),
+        files: List[UploadFile] = File(default=[], description="Files to upload")
+    ):
+        """Upload multipart data to LiFE UI using SSL authentication"""
+        try:
+            # Parse JSON data
+            try:
+                form_data = json.loads(data)
+            except json.JSONDecodeError:
+                raise HTTPException(status_code=400, detail="Invalid JSON in data field")
+            
+            # Process uploaded files
+            file_contents = []
+            for file in files:
+                if file.filename:
+                    content = await file.read()
+                    file_contents.append((
+                        file.filename,
+                        content,
+                        file.content_type or 'application/octet-stream'
+                    ))
+            
+            # Send to LiFE UI API with SSL authentication
+            result = await life_ui_service.post_multipart_data(
+                endpoint=endpoint,
+                form_data=form_data,
+                file_contents=file_contents,
+                use_ssl_auth=True
+            )
+            
+            return {
+                "status": "success",
+                "endpoint": endpoint,
+                "files_uploaded": len(file_contents),
+                "ssl_authenticated": True,
+                "response": result
+            }
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Upload failed: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+    
+    @router.get("/data/{endpoint:path}")
+    async def get_from_life_ui(endpoint: str):
+        """Get data from LiFE UI using SSL authentication"""
+        try:
+            result = await life_ui_service.get_data(endpoint, use_ssl_auth=True)
+            return {
+                "status": "success",
+                "endpoint": endpoint,
+                "ssl_authenticated": True,
+                "data": result
+            }
+        except Exception as e:
+            logger.error(f"GET request failed: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+    
+    return router
+```
+
+## **Updated .env.example**
+
+```bash
+# App Configuration
+DEBUG=false
+HOST=0.0.0.0
+PORT=8000
+
+# LiFE UI Configuration
+LIFE_UI_BASE_URL=https://your-life-ui-api.com
+LIFE_UI_TIMEOUT=30
+
+# SSL Configuration (Java KeyStore pattern)
+SSL_KEYSTORE_PATH=/path/to/client-keystore.p12
+SSL_KEYSTORE_PASSWORD=your_keystore_password
+SSL_TRUSTSTORE_PATH=/path/to/truststore.p12
+SSL_TRUSTSTORE_PASSWORD=your_truststore_password
+
+# Alternative: Separate Certificate Files
+# SSL_CERT_PATH=/path/to/client-cert.pem
+# SSL_KEY_PATH=/path/to/client-key.pem
+
+# SSL Verification Settings
+SSL_VERIFY_HOSTNAME=false
+SSL_VERIFY_PEER=true
+```
+
+## **Main Application (main.py)**
+
+```python
+import logging
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, Depends
+import uvicorn
+
+from config import settings
+from ssl_auth import get_authenticated_user, get_optional_user, ssl_auth
+from life_ui import create_life_ui_router, life_ui_service
+
+logging.basicConfig(
+    level=logging.INFO if not settings.debug else logging.DEBUG,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
+logger = logging.getLogger(__name__)
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logger.info(f"Starting {settings.app_name} with SSL-only authentication")
+    yield
+    logger.info("Shutting down")
+
+app = FastAPI(
+    title=settings.app_name,
+    version=settings.app_version,
+    lifespan=lifespan
+)
+
+# Include LiFE UI router
+app.include_router(create_life_ui_router())
+
+@app.get("/")
+async def root():
+    return {
+        "message": f"Welcome to {settings.app_name}",
+        "version": settings.app_version,
+        "authentication": "SSL Certificate Only",
+        "ssl_configured": ssl_auth.get_ssl_context_for_client() is not None
+    }
+
+@app.get("/protected")
+async def protected_endpoint(user: dict = Depends(get_authenticated_user)):
+    return {
+        "message": f"Hello {user['user_id']}, authenticated via SSL certificate",
+        "user_info": user
+    }
+
+@app.get("/health")
+async def health():
+    return {
+        "status": "healthy",
+        "app": settings.app_name,
+        "ssl_client_context": ssl_auth.get_ssl_context_for_client() is not None,
+        "ssl_server_context": ssl_auth.get_ssl_context_for_server() is not None,
+        "keystore_loaded": ssl_auth.connection_manager.socket_factory.keystore_manager.certificate is not None
+    }
+
+if __name__ == "__main__":
+    server_ssl_context = ssl_auth.get_ssl_context_for_server()
+    ssl_config = {}
+    
+    if server_ssl_context and settings.ssl_cert_path and settings.ssl_key_path:
+        ssl_config = {
+            "ssl_certfile": str(settings.ssl_cert_path),
+            "ssl_keyfile": str(settings.ssl_key_path)
+        }
+    
+    uvicorn.run(
+        app,
+        host=settings.host,
+        port=settings.port,
+        **ssl_config
+    )
+```
+
+## **Key Features Matching Java Pattern**
+
+✅ **Keystore Management**: `SSLKeystoreManager` class mirrors Java KeyStore operations  
+✅ **SSL Socket Factory**: `SSLSocketFactory` equivalent to Java SSLSocketFactory  
+✅ **Connection Manager**: `SSLConnectionManager` handles secure connections  
+✅ **Certificate Loading**: PKCS12 keystore support matching Java pattern  
+✅ **SSL Context Generation**: Similar to Java SSLContext.getInstance()  
+✅ **Client Certificate Authentication**: Both incoming user auth and outgoing API calls  
+✅ **NoopHostnameVerifier**: Configurable hostname verification  
+✅ **FastAPI Integration**: Standard File/Form handling with SSL authentication  
+
+This implementation closely follows the Java SSL pattern you showed in the images while providing a clean Python/FastAPI interface for your MCP server.
+
+[1] https://ppl-ai-file-upload.s3.amazonaws.com/web/direct-files/attachments/images/49220621/892384ca-5c4a-4f2a-99ba-d18fd4985509/IMG_2814.jpg?AWSAccessKeyId=ASIA2F3EMEYE3RFWGY3Q&Signature=7H5ciyygWp1Zz3GtbXRJomLUDQg%3D&x-amz-security-token=IQoJb3JpZ2luX2VjEHkaCXVzLWVhc3QtMSJHMEUCIQCjCaMzUI7gy4vys6rb4liQDh%2B38q2Zr8wghQjwHAVikwIgJFoEnj4iCe7XTQnMEPyo2ikBS9c7DtUOnS1%2BgbCUuNoq%2BgQIof%2F%2F%2F%2F%2F%2F%2F%2F%2F%2FARABGgw2OTk3NTMzMDk3MDUiDJMGDschACZMO5dI%2FCrOBOXmwnKBj8ntPfmLlNnPSbtOLsDntADdGuroVG4BVHoqz17dxAWHkONsXq03nwwdiPFzlJKkks1LRgQZOdr5Rl28jJVPSUVKV4rvYLyySxwiGSz%2FpRmGP%2FNZL9GfbCl%2BHc9zAe576JB3rKVD5PXUqBryxzFp2opsAAYUqYbZKS6ivCwVl4VaxvS1vQqWAad9SbHlfXy71GRU%2BUH9kRfxQVXNo1YVU9Nj4Vx6EAvKR0RUOTjtyNUlkK8sIIqHRGEbm6XFB85YnqKmlRAUEAlTam%2Bvo38TKu2LfmRuMT6f7WJaSRK2zmkpVf96WgSMagNWMGLL0YRQk1fYzeEUoDh9L6Pc48mbPBM87Esr1B2KBZyaFzFCpsoKtggwkHVF6x0qMncrZrsByvVrkDf1UhREbT%2BSFcouYZDM6MRCKS1wKitOCW3JQGq9oxjZHPIVXWx1nlAAqnq%2BPej8zQrLH%2BK2HjGJg%2FRy03ETbx%2B9qFppFlAyuxSm3DMm5tl3R1Vp58h9buN4GIy60P4Hqyv6P8u8DUTpnAlTlmdtnS%2BtI6Xftt%2F1bqOwGVplszFdfh60%2BKjC2pcjeOv6o%2BTiXebERHV3COlHjL%2FdInB9ouPTuIb86wT%2FZqPJK98X70d4Vc9QACsdFdoYKmXC0IbuI5kLNjIhK9%2F%2BpHzgvvU4DyPAt0XA8B2nBtz6Ceghu4gP1SOwaJAMwQ3Se3OxeDLaXCBY1Zb9j9ivOHflZM0QvQ9e6mtGPdRieI%2F4E%2FAgkTmYilSHAa2Pw9PTHZgsnu3E5uw1088JML2BosQGOpoBK1qKtPH4EuDcJFjIWWpcxnKrkElqS5iIdpvxc1tvYsDjPwUB69NU8TKO7Gi5d%2FE64%2FZJs%2F8CAyxQstzDo1axwHObfk7NZT50puSyfmzpstOf8bGrwTcJriKPuS3wJiz8HJkgZEHmzJruZ%2BivkPymGEHdLajtD%2B7lN%2FSClNOF%2BbPstmoL4vxQXwJZMj15Dcz4BDu80bfLSaf9WA%3D%3D&Expires=1753778057
+[2] https://ppl-ai-file-upload.s3.amazonaws.com/web/direct-files/attachments/images/49220621/294fb9c0-dcb4-4f17-a584-798f7239a62d/IMG_2812.jpg?AWSAccessKeyId=ASIA2F3EMEYE3RFWGY3Q&Signature=TqDDxIgKXw5foImV3%2BoPf2%2B4WJE%3D&x-amz-security-token=IQoJb3JpZ2luX2VjEHkaCXVzLWVhc3QtMSJHMEUCIQCjCaMzUI7gy4vys6rb4liQDh%2B38q2Zr8wghQjwHAVikwIgJFoEnj4iCe7XTQnMEPyo2ikBS9c7DtUOnS1%2BgbCUuNoq%2BgQIof%2F%2F%2F%2F%2F%2F%2F%2F%2F%2FARABGgw2OTk3NTMzMDk3MDUiDJMGDschACZMO5dI%2FCrOBOXmwnKBj8ntPfmLlNnPSbtOLsDntADdGuroVG4BVHoqz17dxAWHkONsXq03nwwdiPFzlJKkks1LRgQZOdr5Rl28jJVPSUVKV4rvYLyySxwiGSz%2FpRmGP%2FNZL9GfbCl%2BHc9zAe576JB3rKVD5PXUqBryxzFp2opsAAYUqYbZKS6ivCwVl4VaxvS1vQqWAad9SbHlfXy71GRU%2BUH9kRfxQVXNo1YVU9Nj4Vx6EAvKR0RUOTjtyNUlkK8sIIqHRGEbm6XFB85YnqKmlRAUEAlTam%2Bvo38TKu2LfmRuMT6f7WJaSRK2zmkpVf96WgSMagNWMGLL0YRQk1fYzeEUoDh9L6Pc48mbPBM87Esr1B2KBZyaFzFCpsoKtggwkHVF6x0qMncrZrsByvVrkDf1UhREbT%2BSFcouYZDM6MRCKS1wKitOCW3JQGq9oxjZHPIVXWx1nlAAqnq%2BPej8zQrLH%2BK2HjGJg%2FRy03ETbx%2B9qFppFlAyuxSm3DMm5tl3R1Vp58h9buN4GIy60P4Hqyv6P8u8DUTpnAlTlmdtnS%2BtI6Xftt%2F1bqOwGVplszFdfh60%2BKjC2pcjeOv6o%2BTiXebERHV3COlHjL%2FdInB9ouPTuIb86wT%2FZqPJK98X70d4Vc9QACsdFdoYKmXC0IbuI5kLNjIhK9%2F%2BpHzgvvU4DyPAt0XA8B2nBtz6Ceghu4gP1SOwaJAMwQ3Se3OxeDLaXCBY1Zb9j9ivOHflZM0QvQ9e6mtGPdRieI%2F4E%2FAgkTmYilSHAa2Pw9PTHZgsnu3E5uw1088JML2BosQGOpoBK1qKtPH4EuDcJFjIWWpcxnKrkElqS5iIdpvxc1tvYsDjPwUB69NU8TKO7Gi5d%2FE64%2FZJs%2F8CAyxQstzDo1axwHObfk7NZT50puSyfmzpstOf8bGrwTcJriKPuS3wJiz8HJkgZEHmzJruZ%2BivkPymGEHdLajtD%2B7lN%2FSClNOF%2BbPstmoL4vxQXwJZMj15Dcz4BDu80bfLSaf9WA%3D%3D&Expires=1753778057
+[3] https://ppl-ai-file-upload.s3.amazonaws.com/web/direct-files/attachments/images/49220621/8b8ea98f-47e5-4105-b6a7-5983da3b7b17/IMG_2813.jpg?AWSAccessKeyId=ASIA2F3EMEYE3RFWGY3Q&Signature=WGlLMzUf4xBwO%2FqlUL5NP4O6Tys%3D&x-amz-security-token=IQoJb3JpZ2luX2VjEHkaCXVzLWVhc3QtMSJHMEUCIQCjCaMzUI7gy4vys6rb4liQDh%2B38q2Zr8wghQjwHAVikwIgJFoEnj4iCe7XTQnMEPyo2ikBS9c7DtUOnS1%2BgbCUuNoq%2BgQIof%2F%2F%2F%2F%2F%2F%2F%2F%2F%2FARABGgw2OTk3NTMzMDk3MDUiDJMGDschACZMO5dI%2FCrOBOXmwnKBj8ntPfmLlNnPSbtOLsDntADdGuroVG4BVHoqz17dxAWHkONsXq03nwwdiPFzlJKkks1LRgQZOdr5Rl28jJVPSUVKV4rvYLyySxwiGSz%2FpRmGP%2FNZL9GfbCl%2BHc9zAe576JB3rKVD5PXUqBryxzFp2opsAAYUqYbZKS6ivCwVl4VaxvS1vQqWAad9SbHlfXy71GRU%2BUH9kRfxQVXNo1YVU9Nj4Vx6EAvKR0RUOTjtyNUlkK8sIIqHRGEbm6XFB85YnqKmlRAUEAlTam%2Bvo38TKu2LfmRuMT6f7WJaSRK2zmkpVf96WgSMagNWMGLL0YRQk1fYzeEUoDh9L6Pc48mbPBM87Esr1B2KBZyaFzFCpsoKtggwkHVF6x0qMncrZrsByvVrkDf1UhREbT%2BSFcouYZDM6MRCKS1wKitOCW3JQGq9oxjZHPIVXWx1nlAAqnq%2BPej8zQrLH%2BK2HjGJg%2FRy03ETbx%2B9qFppFlAyuxSm3DMm5tl3R1Vp58h9buN4GIy60P4Hqyv6P8u8DUTpnAlTlmdtnS%2BtI6Xftt%2F1bqOwGVplszFdfh60%2BKjC2pcjeOv6o%2BTiXebERHV3COlHjL%2FdInB9ouPTuIb86wT%2FZqPJK98X70d4Vc9QACsdFdoYKmXC0IbuI5kLNjIhK9%2F%2BpHzgvvU4DyPAt0XA8B2nBtz6Ceghu4gP1SOwaJAMwQ3Se3OxeDLaXCBY1Zb9j9ivOHflZM0QvQ9e6mtGPdRieI%2F4E%2FAgkTmYilSHAa2Pw9PTHZgsnu3E5uw1088JML2BosQGOpoBK1qKtPH4EuDcJFjIWWpcxnKrkElqS5iIdpvxc1tvYsDjPwUB69NU8TKO7Gi5d%2FE64%2FZJs%2F8CAyxQstzDo1axwHObfk7NZT50puSyfmzpstOf8bGrwTcJriKPuS3wJiz8HJkgZEHmzJruZ%2BivkPymGEHdLajtD%2B7lN%2FSClNOF%2BbPstmoL4vxQXwJZMj15Dcz4BDu80bfLSaf9WA%3D%3D&Expires=1753778057
