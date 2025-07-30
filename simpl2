@@ -1,0 +1,151 @@
+Thanks for confirming. Since you can’t directly access the cert and key files, but instead have access to a password-protected certificate store, we need to:
+
+⸻
+
+🔍 Reevaluate the Situation
+
+You have access to a directory (certs/my_certificates) and a password (Certificates123), but you don’t have raw .crt and .key files. Most likely, the directory contains a PKCS#12 file (.p12 or .pfx), which:
+	•	Combines the client certificate, private key, and CA chain
+	•	Is encrypted and protected with the password
+
+Let’s proceed assuming the directory contains a file like:
+
+certs/my_certificates/client_certificate.p12
+
+
+⸻
+
+✅ Plan of Action
+
+We will:
+	1.	Load the .p12 file programmatically using cryptography
+	2.	Extract the private key and certificate in memory
+	3.	Write them to temporary files
+	4.	Use them in FastAPI’s outbound HTTP client (e.g., httpx)
+	5.	(Optional) Clean up temporary files securely
+
+⸻
+
+✅ Step-by-Step Implementation
+
+1. ✅ Install Required Packages
+
+pip install cryptography httpx
+
+
+⸻
+
+2. 🔧 Extract Certificates From .p12 File (In Memory)
+
+# cert_loader.py
+import os
+import tempfile
+from cryptography.hazmat.primitives.serialization import pkcs12, Encoding, PrivateFormat, NoEncryption
+from cryptography.hazmat.backends import default_backend
+
+P12_PATH = "certs/my_certificates/client_certificate.p12"
+P12_PASSWORD = b"Certificates123"  # Must be bytes
+
+def extract_cert_and_key():
+    with open(P12_PATH, "rb") as f:
+        p12_data = f.read()
+
+    private_key, certificate, additional_certificates = pkcs12.load_key_and_certificates(
+        p12_data,
+        P12_PASSWORD,
+        backend=default_backend()
+    )
+
+    if not private_key or not certificate:
+        raise ValueError("Invalid certificate or key in the PKCS#12 file.")
+
+    # Write to temporary PEM files
+    cert_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pem")
+    key_file = tempfile.NamedTemporaryFile(delete=False, suffix=".key")
+
+    cert_file.write(certificate.public_bytes(Encoding.PEM))
+    key_file.write(private_key.private_bytes(
+        encoding=Encoding.PEM,
+        format=PrivateFormat.TraditionalOpenSSL,
+        encryption_algorithm=NoEncryption()
+    ))
+
+    cert_file.flush()
+    key_file.flush()
+
+    return cert_file.name, key_file.name
+
+
+⸻
+
+3. 🌐 Make API Call Using the Temporary Cert and Key
+
+# ssl_client.py
+import httpx
+from cert_loader import extract_cert_and_key
+
+def call_secure_api():
+    cert_path, key_path = extract_cert_and_key()
+    try:
+        with httpx.Client(cert=(cert_path, key_path)) as client:
+            response = client.get("https://secure-api.example.com/endpoint")
+            return {
+                "status": response.status_code,
+                "data": response.text
+            }
+    finally:
+        # Clean up temp files
+        import os
+        os.remove(cert_path)
+        os.remove(key_path)
+
+
+⸻
+
+4. ⚙️ Use in FastAPI
+
+# main.py
+from fastapi import FastAPI
+from ssl_client import call_secure_api
+
+app = FastAPI()
+
+@app.get("/secure-proxy")
+def secure_proxy():
+    try:
+        result = call_secure_api()
+        return result
+    except Exception as e:
+        return {"error": str(e)}
+
+
+⸻
+
+5. 🔐 Extra Security (Optional)
+	•	Load password from environment variable:
+
+import os
+P12_PASSWORD = os.getenv("CERT_PASSWORD", "").encode()
+
+
+	•	Clear files more securely using unlink() with proper file permissions.
+
+⸻
+
+✅ Summary
+
+You:
+	•	DO NOT need .crt/.key files explicitly
+	•	CAN extract from a .p12 certificate store (if that’s what the directory contains)
+	•	CAN load, extract, and use them securely in memory
+	•	CAN integrate this into FastAPI-based outgoing requests
+
+⸻
+
+❓ Next Steps
+
+Please confirm:
+	1.	Does your certs/my_certificates folder contain a .p12 or .pfx file?
+	2.	Would you like to authenticate to a mutual TLS API endpoint or serve your FastAPI app with SSL?
+
+I can adapt the solution accordingly. You can also upload the directory contents (filenames only) if unsure.
