@@ -1,0 +1,399 @@
+Below is a single-file implementation of a strategy-pattern hallucination detector/eliminator service, plus pytest unit tests. It covers: math re-execution, numeric-from-context checks, tabular verification, and pluggable text groundedness (inject your own NLI/LLM scorer). No external network calls.
+
+⸻
+
+hallucination_guard.py
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any, Callable, Dict, List, Optional
+import re
+
+# =========================
+# Types
+# =========================
+
+@dataclass
+class Passage:
+    id: str
+    text: str
+    meta: Dict[str, Any] = field(default_factory=dict)
+
+@dataclass
+class Assessment:
+    score: float                  # 0..1 groundedness/faithfulness score
+    decision: str                 # "accept" | "revise_or_reretrieve" | "refuse"
+    name: str                     # strategy name
+    details: Dict[str, Any] = field(default_factory=dict)
+
+@dataclass
+class AnswerPackage:
+    question: str = ""
+    answer_text: str = ""
+    passages: List[Passage] = field(default_factory=list)
+    # Optional math/tabular fields
+    math: Optional[Dict[str, Any]] = None      # {"expression": "2+2", "expected": 4.0, "tolerance": 1e-6}
+    table: Optional[Dict[str, Any]] = None     # {"df": "df1", "op": "sum", "column": "x", "expected": 6.0}
+    meta: Dict[str, Any] = field(default_factory=dict)
+
+# =========================
+# Utilities
+# =========================
+
+_NUM_RE = re.compile(r'[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?')
+
+def _extract_numbers(text: Optional[str]) -> List[float]:
+    if not text:
+        return []
+    out: List[float] = []
+    for n in _NUM_RE.findall(text):
+        try:
+            out.append(float(n))
+        except Exception:
+            pass
+    return out
+
+def _split_into_claims(text: str) -> List[str]:
+    parts = re.split(r'(?<=[\.\?\!])\s+', (text or "").strip())
+    return [p for p in parts if len(p.split()) >= 5]
+
+def _num_supported(target: float, pool: List[float], atol: float, rtol: float) -> bool:
+    for x in pool:
+        if abs(x - target) <= max(atol, rtol * max(abs(x), abs(target))):
+            return True
+    return False
+
+# =========================
+# Strategy Base
+# =========================
+
+class GroundednessStrategy:
+    name: str = "base"
+    def assess(self, pkg: AnswerPackage, runtime: Optional[Dict[str, Any]] = None) -> Assessment:
+        raise NotImplementedError
+
+# =========================
+# Strategies
+# =========================
+
+class NumericCalculationStrategy(GroundednessStrategy):
+    """
+    Recompute math.expression with sympy and compare to expected (or last number in answer).
+    """
+    name: str = "numeric_calculation"
+
+    def assess(self, pkg: AnswerPackage, runtime: Optional[Dict[str, Any]] = None) -> Assessment:
+        try:
+            import sympy as sp  # real symbolic execution
+        except Exception as e:
+            return Assessment(0.0, "revise_or_reretrieve", self.name, {"error": f"sympy missing: {e}"})
+
+        if not pkg.math or "expression" not in pkg.math:
+            return Assessment(0.0, "revise_or_reretrieve", self.name, {"error": "math.expression missing"})
+
+        expr = str(pkg.math["expression"])
+        tol = float(pkg.math.get("tolerance", 1e-6))
+
+        try:
+            computed = float(sp.N(sp.sympify(expr)))
+        except Exception as e:
+            return Assessment(0.0, "revise_or_reretrieve", self.name, {"error": f"sympy failed: {e}", "expression": expr})
+
+        if "expected" in pkg.math:
+            try:
+                expected = float(pkg.math["expected"])
+            except Exception:
+                return Assessment(0.0, "revise_or_reretrieve", self.name, {"error": "math.expected not numeric"})
+        else:
+            nums = _extract_numbers(pkg.answer_text)
+            expected = float(nums[-1]) if nums else None
+
+        if expected is None:
+            return Assessment(0.0, "revise_or_reretrieve", self.name, {"error": "no expected value available"})
+
+        diff = abs(computed - expected)
+        ok = diff <= tol
+        rel = diff / (abs(expected) + tol)
+        score = 1.0 if ok else max(0.0, 1.0 - min(1.0, rel))
+        return Assessment(score, "accept" if ok else "revise_or_reretrieve", self.name,
+                          {"computed": computed, "expected": expected, "abs_diff": diff, "tolerance": tol})
+
+class NumericFromContextStrategy(GroundednessStrategy):
+    """
+    Check that numbers in the answer are supported by (≈) numbers appearing in the passages.
+    """
+    def __init__(self, tolerance: float = 1e-6, rel_tolerance: float = 0.01, min_support: int = 1):
+        self.tolerance = tolerance
+        self.rel_tolerance = rel_tolerance
+        self.min_support = min_support
+        self.name = "numeric_from_context"
+
+    def assess(self, pkg: AnswerPackage, runtime: Optional[Dict[str, Any]] = None) -> Assessment:
+        ans_nums = _extract_numbers(pkg.answer_text)
+        ctx_nums: List[float] = []
+        for p in pkg.passages:
+            ctx_nums.extend(_extract_numbers(p.text))
+
+        if not ans_nums:
+            return Assessment(1.0, "accept", self.name, {"note": "no numbers in answer"})
+
+        supported = [a for a in ans_nums if _num_supported(a, ctx_nums, self.tolerance, self.rel_tolerance)]
+        frac = len(supported) / max(1, len(ans_nums))
+        decision = "accept" if len(supported) >= self.min_support and frac >= 0.8 else "revise_or_reretrieve"
+        return Assessment(float(frac), decision, self.name, {
+            "answer_numbers": ans_nums,
+            "context_numbers": ctx_nums,
+            "supported": supported
+        })
+
+class TabularSQLStrategy(GroundednessStrategy):
+    """
+    Re-run a simple aggregation on a registered pandas DataFrame and compare to expected (or last number in answer).
+    runtime must include: {"df_registry": {"df_name": pandas.DataFrame, ...}}
+    table spec: {"df": "df1", "op": "sum"|"mean"|"count", "column": "x", "expected": 6.0, "tolerance": 1e-6}
+    """
+    name: str = "tabular_sql"
+
+    def assess(self, pkg: AnswerPackage, runtime: Optional[Dict[str, Any]] = None) -> Assessment:
+        if not pkg.table:
+            return Assessment(0.0, "revise_or_reretrieve", self.name, {"error": "table spec missing"})
+        if runtime is None or "df_registry" not in runtime:
+            return Assessment(0.0, "revise_or_reretrieve", self.name, {"error": "runtime.df_registry missing"})
+
+        spec = pkg.table
+        df_name = spec.get("df")
+        op = spec.get("op")
+        col = spec.get("column")
+        tol = float(spec.get("tolerance", 1e-6))
+
+        if df_name not in runtime["df_registry"]:
+            return Assessment(0.0, "revise_or_reretrieve", self.name, {"error": f"unknown df {df_name}"})
+        df = runtime["df_registry"][df_name]
+
+        try:
+            if op == "sum":
+                computed = float(df[col].sum())
+            elif op == "mean":
+                computed = float(df[col].mean())
+            elif op == "count":
+                computed = float(df[col].count())
+            else:
+                return Assessment(0.0, "revise_or_reretrieve", self.name, {"error": f"unsupported op {op}"})
+        except Exception as e:
+            return Assessment(0.0, "revise_or_reretrieve", self.name, {"error": f"execution failed: {e}"})
+
+        if "expected" in spec and spec["expected"] is not None:
+            expected = float(spec["expected"])
+        else:
+            nums = _extract_numbers(pkg.answer_text)
+            expected = float(nums[-1]) if nums else None
+
+        if expected is None:
+            return Assessment(0.0, "revise_or_reretrieve", self.name, {"error": "no expected to compare"})
+
+        diff = abs(computed - expected)
+        ok = diff <= tol
+        rel = diff / (abs(expected) + tol)
+        score = 1.0 if ok else max(0.0, 1.0 - min(1.0, rel))
+        return Assessment(score, "accept" if ok else "revise_or_reretrieve", self.name,
+                          {"computed": computed, "expected": expected, "abs_diff": diff, "tolerance": tol})
+
+class NLITextStrategy(GroundednessStrategy):
+    """
+    Pluggable textual groundedness using an injected scorer:
+      scorer(claim: str, passages: List[Passage]) -> float in [0,1]
+    Aggregates per-claim scores via harmonic mean; requires no claim < 0.4 and HM >= 0.7.
+    """
+    def __init__(self, scorer: Callable[[str, List[Passage]], float]):
+        self.scorer = scorer
+        self.name = "text_nli"
+
+    def assess(self, pkg: AnswerPackage, runtime: Optional[Dict[str, Any]] = None) -> Assessment:
+        claims = _split_into_claims(pkg.answer_text or "")
+        if not claims:
+            return Assessment(1.0, "accept", self.name, {"note": "no claims"})
+        scores: List[float] = []
+        per: List[Dict[str, Any]] = []
+        for c in claims:
+            s = float(self.scorer(c, pkg.passages))
+            s = max(0.0, min(1.0, s))
+            scores.append(s)
+            per.append({"claim": c, "score": s})
+        hm = len(scores) / sum((1.0 / max(1e-6, s)) for s in scores)
+        decision = "accept" if hm >= 0.7 and min(scores) >= 0.4 else "revise_or_reretrieve"
+        return Assessment(float(hm), decision, self.name, {"per_claim": per})
+
+# =========================
+# Orchestrator
+# =========================
+
+@dataclass
+class HallucinationGuard:
+    strategies: Dict[str, GroundednessStrategy] = field(default_factory=dict)
+    require_all: bool = False  # if True: all strategies must accept
+
+    def register(self, strategy: GroundednessStrategy) -> None:
+        self.strategies[strategy.name] = strategy
+
+    def unregister(self, name: str) -> None:
+        self.strategies.pop(name, None)
+
+    def evaluate(self, pkg: AnswerPackage, runtime: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        if not self.strategies:
+            raise ValueError("No strategies registered")
+
+        results: List[Assessment] = []
+        for s in self.strategies.values():
+            results.append(s.assess(pkg, runtime=runtime))
+
+        min_score = min(r.score for r in results)
+        if self.require_all:
+            decision = "accept" if all(r.decision == "accept" for r in results) else "revise_or_reretrieve"
+        else:
+            if any(r.decision == "refuse" for r in results):
+                decision = "refuse"
+            else:
+                decision = "accept" if min_score >= 0.7 and all(r.decision == "accept" for r in results) else "revise_or_reretrieve"
+
+        return {
+            "decision": decision,
+            "score": float(min_score),
+            "assessments": [r.__dict__ for r in results],
+        }
+
+
+⸻
+
+test_hallucination_guard.py (pytest)
+
+import pandas as pd
+from hallucination_guard import (
+    Passage, AnswerPackage,
+    NumericCalculationStrategy, NumericFromContextStrategy, TabularSQLStrategy,
+    NLITextStrategy, HallucinationGuard
+)
+
+def test_numeric_calculation_pass():
+    pkg = AnswerPackage(
+        question="What is 2+2?",
+        answer_text="The result is 4.",
+        math={"expression": "2+2", "expected": 4.0, "tolerance": 1e-9}
+    )
+    s = NumericCalculationStrategy()
+    res = s.assess(pkg)
+    assert res.decision == "accept"
+    assert res.score == 1.0
+
+def test_numeric_calculation_fail():
+    pkg = AnswerPackage(
+        question="Compute 10/3",
+        answer_text="It is 4.",
+        math={"expression": "10/3", "expected": 4.0, "tolerance": 1e-9}
+    )
+    s = NumericCalculationStrategy()
+    res = s.assess(pkg)
+    assert res.decision == "revise_or_reretrieve"
+    assert res.score < 1.0
+
+def test_numeric_from_context_accepts_supported_number():
+    passages = [
+        Passage(id="d1", text="Revenue was 123.45 in Q1. Expenses 87.0."),
+        Passage(id="d2", text="Forecast 130 next quarter.")
+    ]
+    pkg = AnswerPackage(
+        question="What was the revenue?",
+        answer_text="Revenue was 123.45.",
+        passages=passages
+    )
+    s = NumericFromContextStrategy()
+    res = s.assess(pkg)
+    assert res.decision == "accept"
+    assert res.score >= 0.8
+
+def test_numeric_from_context_flags_invented_number():
+    passages = [
+        Passage(id="d1", text="Revenue was 100 in Q1."),
+        Passage(id="d2", text="Nothing else.")
+    ]
+    pkg = AnswerPackage(
+        question="What was the revenue?",
+        answer_text="Revenue was 123.45.",
+        passages=passages
+    )
+    s = NumericFromContextStrategy()
+    res = s.assess(pkg)
+    assert res.decision != "accept"
+    assert res.score < 0.8
+
+def test_tabular_sql_sum_accept():
+    df = pd.DataFrame({"x": [1,2,3]})
+    runtime = {"df_registry": {"df1": df}}
+    pkg = AnswerPackage(
+        question="Sum x",
+        answer_text="The sum is 6.",
+        table={"df": "df1", "op": "sum", "column": "x", "expected": 6.0, "tolerance": 1e-9}
+    )
+    s = TabularSQLStrategy()
+    res = s.assess(pkg, runtime=runtime)
+    assert res.decision == "accept"
+    assert res.score == 1.0
+
+def test_text_nli_mock_accept():
+    def mock_scorer(claim, passages):
+        text = " ".join(p.text for p in passages).lower()
+        return 0.9 if "paris" in text and "france" in text else 0.5
+
+    passages = [Passage(id="d1", text="Paris is the capital of France. It is in Europe.")]
+    pkg = AnswerPackage(
+        question="What is the capital of France?",
+        answer_text="Paris is the capital of France. It is located in Europe.",
+        passages=passages
+    )
+    s = NLITextStrategy(scorer=mock_scorer)
+    res = s.assess(pkg)
+    assert res.decision == "accept"
+    assert res.score >= 0.7
+
+def test_guard_all_strategies_must_pass():
+    df = pd.DataFrame({"x": [1,2,3]})
+    runtime = {"df_registry": {"df1": df}}
+    passages = [Passage(id="d1", text="Revenue was 6 in total.")]
+    pkg = AnswerPackage(
+        question="Sum x and report revenue",
+        answer_text="The sum is 6 and revenue was 6.",
+        passages=passages,
+        math={"expression": "1+2+3", "expected": 6.0, "tolerance": 1e-9},
+        table={"df": "df1", "op": "sum", "column": "x", "expected": 6.0, "tolerance": 1e-9}
+    )
+    guard = HallucinationGuard(require_all=True)
+    guard.register(NumericCalculationStrategy())
+    guard.register(TabularSQLStrategy())
+    guard.register(NumericFromContextStrategy())
+    # text strategy is optional here; leave out to keep test deterministic
+    out = guard.evaluate(pkg, runtime=runtime)
+    assert out["decision"] == "accept"
+    assert out["score"] >= 0.99
+
+def test_guard_blocks_when_one_strategy_fails():
+    df = pd.DataFrame({"x": [1,2,3]})
+    runtime = {"df_registry": {"df1": df}}
+    passages = [Passage(id="d1", text="Revenue was 100 in total.")]
+    pkg = AnswerPackage(
+        question="Sum x and report revenue",
+        answer_text="The sum is 6 and revenue was 123.45.",
+        passages=passages,
+        math={"expression": "1+2+3", "expected": 6.0, "tolerance": 1e-9},
+        table={"df": "df1", "op": "sum", "column": "x", "expected": 6.0, "tolerance": 1e-9}
+    )
+    guard = HallucinationGuard(require_all=True)
+    guard.register(NumericCalculationStrategy())
+    guard.register(TabularSQLStrategy())
+    guard.register(NumericFromContextStrategy())
+    out = guard.evaluate(pkg, runtime=runtime)
+    assert out["decision"] == "revise_or_reretrieve"
+
+Notes
+	•	NumericCalculationStrategy depends on sympy. If you don’t want that, replace with a pure-Python evaluator and a whitelist parser.
+	•	TabularSQLStrategy expects a DataFrame registry in runtime. Swap for DuckDB/SQLAlchemy if you prefer.
+	•	NLITextStrategy is scorer-pluggable; inject an open-weights NLI model or an LLM-judge.
