@@ -1,163 +1,21 @@
-Here’s a clean, copy-paste path to **shade Spark’s ANTLR (4.9.3)** while letting **Hibernate/JPA keep ANTLR 4.13**.
-
----
-
-## 1) Make sure both versions are present (dependencies)
-
-In the module where Spark + Spring live, keep your normal deps. Add an explicit ANTLR 4.13 so Hibernate/JPA definitely get it.
-
-```xml
-<dependencies>
-  <!-- Spark -->
-  <dependency>
-    <groupId>org.apache.spark</groupId>
-    <artifactId>spark-sql_2.12</artifactId>
-    <version>3.5.0</version>
-    <!-- don't exclude ANTLR here; we want Spark's 4.9.3 to come in -->
-  </dependency>
-
-  <!-- Spring Data JPA + Hibernate (example) -->
-  <dependency>
-    <groupId>org.springframework.boot</groupId>
-    <artifactId>spring-boot-starter-data-jpa</artifactId>
-  </dependency>
-
-  <!-- Force presence of ANTLR 4.13 for Hibernate/JPA -->
-  <dependency>
-    <groupId>org.antlr</groupId>
-    <artifactId>antlr4-runtime</artifactId>
-    <version>4.13.0</version>
-  </dependency>
-</dependencies>
-```
-
----
-
-## 2) Add the **Shade plugin** (relocate Spark’s ANTLR)
-
-Put this under `<build><plugins>` in the **same module**.
-
-> We run shade in the **prepare-package** phase so Spring Boot’s **repackage** (which runs at *package*) uses the already-relocated classes.
-> We also limit the shaded content to **only** `org.antlr:antlr4-runtime` so other deps are untouched.
-
-```xml
-<build>
-  <plugins>
-
-    <!-- 2a) Relocate Spark's ANTLR (4.9.3) so it lives under sparkshade.* -->
-    <plugin>
-      <groupId>org.apache.maven.plugins</groupId>
-      <artifactId>maven-shade-plugin</artifactId>
-      <version>3.5.0</version>
-      <executions>
-        <execution>
-          <id>shade-antlr</id>
-          <phase>prepare-package</phase>
-          <goals>
-            <goal>shade</goal>
-          </goals>
-          <configuration>
-            <!-- Only pull ANTLR 4.9.3 dependency content into the main jar -->
-            <artifactSet>
-              <includes>
-                <include>org.antlr:antlr4-runtime</include>
-              </includes>
-            </artifactSet>
-
-            <!-- Relocate ANTLR packages so Spark uses a private copy -->
-            <relocations>
-              <relocation>
-                <pattern>org.antlr.v4.runtime</pattern>
-                <shadedPattern>sparkshade.org.antlr.v4.runtime</shadedPattern>
-              </relocation>
-            </relocations>
-
-            <!-- Keep Boot happy: don't rewrite the POM that repackage reads -->
-            <createDependencyReducedPom>false</createDependencyReducedPom>
-
-            <!-- Safer for Spring apps; avoid over-aggressive stripping -->
-            <minimizeJar>false</minimizeJar>
-          </configuration>
-        </execution>
-      </executions>
-    </plugin>
-
-    <!-- 2b) Spring Boot: build the executable jar AFTER shading -->
-    <plugin>
-      <groupId>org.springframework.boot</groupId>
-      <artifactId>spring-boot-maven-plugin</artifactId>
-      <executions>
-        <execution>
-          <goals>
-            <goal>repackage</goal>
-          </goals>
-          <!-- default phase is "package"; runs after prepare-package -->
-        </execution>
-      </executions>
-    </plugin>
-
-  </plugins>
-</build>
-```
-
-What this does:
-
-* Pulls **only** `antlr4-runtime:4.9.3` (Spark’s transitive) into your app jar and **renames** its classes to `sparkshade.org.antlr.v4.runtime.*`.
-* Leaves your **regular** `org.antlr:antlr4-runtime:4.13.0` dependency untouched as a normal nested lib inside the Boot jar.
-* Spring Boot then **repackages** everything into one runnable jar that contains:
-
-  * Your app classes + **relocated** ANTLR 4.9.3 classes
-  * A nested jar for **ANTLR 4.13.0** (used by Hibernate/JPA)
-
-No classpath collision because the package names differ.
-
----
-
-## 3) Build
-
-```bash
-mvn clean package
-```
-
-You should see logs like:
-
-```
-Relocating org.antlr.v4.runtime -> sparkshade.org.antlr.v4.runtime
-```
-
----
-
-## 4) Verify
-
-```bash
-jar tf target/*SNAPSHOT.jar | grep -E "antlr|sparkshade"
-```
-
-You should find entries similar to:
-
-```
-sparkshade/org/antlr/v4/runtime/ANTLRInputStream.class   <-- relocated 4.9.3
-BOOT-INF/lib/antlr4-runtime-4.13.0.jar                   <-- normal 4.13 for Hibernate
-```
-
----
-
-## 5) Run
-
-Use the Spring Boot fat jar as usual:
-
-```bash
-java -jar target/your-artifact-name.jar
-```
-
----
-
-### Notes & gotchas
-
-* If your **own** code (or Hibernate) imports `org.antlr.v4.runtime.*`, it will keep using **4.13**. Only Spark’s bytecode (and any code in its dependency graph that referenced 4.9.3) will use the relocated copy.
-* Don’t set `<finalName>` or a `<classifier>` in shade here; letting Spring Boot repackage the same main artifact keeps things simple.
-* If you use multiple Spark modules (sql, catalyst, etc.) this config still works because they all depend on `org.antlr:antlr4-runtime`—the relocation applies to that library’s classes.
-
----
-
-If you paste your current `<build>` and `<dependencies>` blocks, I’ll adapt the snippet exactly to your POM (including versions and any parent BOMs).
+<plugin>
+  <groupId>org.apache.maven.plugins</groupId>
+  <artifactId>maven-shade-plugin</artifactId>
+  <version>3.5.0</version>
+  <executions>
+    <execution>
+      <phase>package</phase> <!-- This is key -->
+      <goals>
+        <goal>shade</goal>
+      </goals>
+      <configuration>
+        <relocations>
+          <relocation>
+            <pattern>org.antlr.v4.runtime</pattern>
+            <shadedPattern>sparkshade.org.antlr.v4.runtime</shadedPattern>
+          </relocation>
+        </relocations>
+      </configuration>
+    </execution>
+  </executions>
+</plugin>
