@@ -1,5 +1,7 @@
 <build>
   <plugins>
+
+    <!-- Ensure SHADE runs BEFORE Spring Boot repackage -->
     <plugin>
       <groupId>org.apache.maven.plugins</groupId>
       <artifactId>maven-shade-plugin</artifactId>
@@ -7,6 +9,7 @@
 
       <executions>
         <execution>
+          <id>shade-antlr</id>
           <phase>package</phase>
           <goals>
             <goal>shade</goal>
@@ -18,7 +21,7 @@
             <relocations>
               <relocation>
                 <pattern>org.antlr.v4.runtime</pattern>
-                <shadedPattern>shaded.antlr4.v493.runtime</shadedPattern>
+                <shadedPattern>shaded.antlr.v493.runtime</shadedPattern>
                 <includes>
                   <include>org.antlr:antlr4-runtime</include>
                 </includes>
@@ -28,5 +31,19 @@
         </execution>
       </executions>
     </plugin>
+
+    <!-- Repack the SHADED jar -->
+    <plugin>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-maven-plugin</artifactId>
+      <executions>
+        <execution>
+          <goals>
+            <goal>repackage</goal>
+          </goals>
+        </execution>
+      </executions>
+    </plugin>
+
   </plugins>
 </build>
