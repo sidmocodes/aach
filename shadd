@@ -1,49 +1,59 @@
-<build>
-  <plugins>
-
-    <!-- Ensure SHADE runs BEFORE Spring Boot repackage -->
-    <plugin>
+<plugin>
       <groupId>org.apache.maven.plugins</groupId>
       <artifactId>maven-shade-plugin</artifactId>
       <version>3.5.1</version>
-
       <executions>
         <execution>
-          <id>shade-antlr</id>
+          <id>create-shaded-jar</id>
           <phase>package</phase>
           <goals>
             <goal>shade</goal>
           </goals>
-
           <configuration>
+            <!-- attach shaded jar with classifier so spring-boot can repackage it -->
+            <shadedArtifactAttached>true</shadedArtifactAttached>
+            <shadedClassifierName>shaded</shadedClassifierName>
+
+            <!-- do not rewrite the POM (optional, safer in multi-module) -->
             <createDependencyReducedPom>false</createDependencyReducedPom>
 
+            <!-- relocation: move org.antlr.v4.runtime -> shaded.antlr.v493.runtime -->
             <relocations>
               <relocation>
                 <pattern>org.antlr.v4.runtime</pattern>
                 <shadedPattern>shaded.antlr.v493.runtime</shadedPattern>
+                <!-- include only the antlr4-runtime artifact for clarity -->
                 <includes>
                   <include>org.antlr:antlr4-runtime</include>
                 </includes>
               </relocation>
             </relocations>
+
+            <!-- optional: keep file order deterministic -->
+            <minimizeJar>false</minimizeJar>
           </configuration>
         </execution>
       </executions>
     </plugin>
 
-    <!-- Repack the SHADED jar -->
+    <!-- 2) Spring Boot plugin: repackage the shaded classifier produced above -->
     <plugin>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-maven-plugin</artifactId>
+      <!-- version usually inherited from parent; set explicitly if needed -->
       <executions>
         <execution>
+          <id>repackage-shaded</id>
           <goals>
             <goal>repackage</goal>
           </goals>
+          <configuration>
+            <!-- IMPORTANT: tell spring-boot to repackage the shaded artifact -->
+            <classifier>shaded</classifier>
+
+            <!-- optional: produce an executable jar with the same classifier output -->
+            <!-- if you want the final executable to be artifactId-version-shaded.jar -->
+          </configuration>
         </execution>
       </executions>
     </plugin>
-
-  </plugins>
-</build>
